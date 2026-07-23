@@ -2,10 +2,18 @@ package io.github.toolsdev404.proxyx.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val Purple80 = Color(0xFFD0BCFF)
-val PurpleGrey80 = Color(0xFFCCC2DC)
-val Pink80 = Color(0xFFEFB8C8)
+// Brand accent — green = secure / connected
+val AccentGreen = Color(0xFF22C55E)
 
-val Purple40 = Color(0xFF6650a4)
-val PurpleGrey40 = Color(0xFF625b71)
-val Pink40 = Color(0xFF7D5260)
+// Dark surfaces
+val BackgroundDark = Color(0xFF0B0F14)
+val SurfaceDark = Color(0xFF161B22)
+val SurfaceVariantDark = Color(0xFF222A34)
+
+// Text
+val TextPrimary = Color(0xFFE6EDF3)
+val TextSecondary = Color(0xFF9BA7B4)
+
+// Status
+val Disconnected = Color(0xFF64748B)
+val ErrorRed = Color(0xFFEF4444)
