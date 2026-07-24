@@ -1,0 +1,36 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+
+    <!-- Gradient tile (corners get rounded by the app when shown) -->
+    <path android:pathData="M0,0 L512,0 L512,512 L0,512 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="0"
+                android:startY="0"
+                android:endX="512"
+                android:endY="512"
+                android:startColor="#FF10B981"
+                android:endColor="#FF34D399" />
+        </aapt:attr>
+    </path>
+
+    <!-- Relay route: two nodes joined by a smooth S-path -->
+    <path
+        android:pathData="M168,184 L298,184 C350,232 162,280 214,328 L344,328"
+        android:strokeColor="#FFF5F7F2"
+        android:strokeWidth="40"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <path
+        android:fillColor="#FFF5F7F2"
+        android:pathData="M121,184 a47,47 0 1 0 94,0 a47,47 0 1 0 -94,0 Z" />
+    <path
+        android:fillColor="#FFF5F7F2"
+        android:pathData="M297,328 a47,47 0 1 0 94,0 a47,47 0 1 0 -94,0 Z" />
+</vector>

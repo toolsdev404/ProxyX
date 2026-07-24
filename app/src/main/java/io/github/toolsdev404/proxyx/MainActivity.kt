@@ -6,6 +6,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -73,6 +74,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -269,15 +271,13 @@ fun HomeScreen(
             .padding(24.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
+            Image(
+                painter = painterResource(id = R.drawable.ic_proxyx_logo),
+                contentDescription = "ProxyX logo",
                 modifier = Modifier
                     .size(38.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .background(AccentGreen),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("P", color = Color(0xFF03110A), fontWeight = FontWeight.Bold)
-            }
+            )
             Spacer(Modifier.width(10.dp))
             Text("ProxyX", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         }
