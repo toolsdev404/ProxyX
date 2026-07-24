@@ -42,6 +42,9 @@ import java.net.Socket
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 enum class ProxyType { SOCKS5, HTTP, HTTPS }
 
@@ -123,6 +126,14 @@ data class TestOutcome(
     val message: String
 )
 
+data class LogEntry(
+    val timeMillis: Long,
+    val timeText: String,
+    val proxyName: String,
+    val success: Boolean,
+    val message: String
+)
+
 class ProxyViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = ProxyRepository(AppDatabase.getInstance(app).proxyDao())
     private val settingsRepo = SettingsRepository(app)
@@ -145,6 +156,9 @@ class ProxyViewModel(app: Application) : AndroidViewModel(app) {
     private val _testResult = MutableStateFlow<TestOutcome?>(null)
     val testResult: StateFlow<TestOutcome?> = _testResult.asStateFlow()
 
+    private val _logs = MutableStateFlow<List<LogEntry>>(emptyList())
+    val logs: StateFlow<List<LogEntry>> = _logs.asStateFlow()
+
     fun setThemeMode(mode: ThemeMode) = viewModelScope.launch { settingsRepo.setThemeMode(mode) }
     fun select(id: Int) { _selectedId.value = id; _isConnected.value = false }
     fun toggleConnect() { _isConnected.value = !_isConnected.value }
@@ -161,20 +175,22 @@ class ProxyViewModel(app: Application) : AndroidViewModel(app) {
         _testingId.value = p.id
         viewModelScope.launch {
             val result = ProxyTester.test(p)
-            _testResult.value = TestOutcome(
-                profileId = p.id,
-                profileName = p.name,
-                success = result is ProxyTestResult.Success,
-                message = when (result) {
-                    is ProxyTestResult.Success -> "Connected in ${result.latencyMs} ms"
-                    is ProxyTestResult.Failure -> result.reason
-                }
-            )
+            val ok = result is ProxyTestResult.Success
+            val msg = when (result) {
+                is ProxyTestResult.Success -> "Connected in ${result.latencyMs} ms"
+                is ProxyTestResult.Failure -> result.reason
+            }
+            _testResult.value = TestOutcome(p.id, p.name, ok, msg)
+            val now = System.currentTimeMillis()
+            val timeText = SimpleDateFormat("MMM d, HH:mm:ss", Locale.getDefault()).format(Date(now))
+            _logs.value = (listOf(LogEntry(now, timeText, p.name, ok, msg)) + _logs.value).take(100)
             _testingId.value = null
         }
     }
 
     fun clearTestResult() { _testResult.value = null }
+
+    fun clearLogs() { _logs.value = emptyList() }
 }
 
 /** The result of testing a proxy: either it worked (with latency) or it failed (with a reason). */

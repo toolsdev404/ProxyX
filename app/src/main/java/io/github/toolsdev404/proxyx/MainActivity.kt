@@ -70,6 +70,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -87,7 +88,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import io.github.toolsdev404.proxyx.ui.theme.AccentGreen
+import kotlinx.coroutines.launch
 import io.github.toolsdev404.proxyx.ui.theme.Disconnected
 import io.github.toolsdev404.proxyx.ui.theme.ProxyXTheme
 
@@ -196,16 +197,16 @@ fun ProxyXApp() {
     ProxyXTheme(themeMode = themeMode) {
         val profiles by vm.profiles.collectAsState()
         val selectedId by vm.selectedId.collectAsState()
-        val isConnected by vm.isConnected.collectAsState()
         val testingId by vm.testingId.collectAsState()
         val testResult by vm.testResult.collectAsState()
+        val logs by vm.logs.collectAsState()
         val snackbarHostState = remember { SnackbarHostState() }
+        val scope = rememberCoroutineScope()
         LaunchedEffect(testResult) {
             testResult?.let {
                 snackbarHostState.showSnackbar(
                     (if (it.success) "\u2705 " else "\u274C ") + it.profileName + ": " + it.message
                 )
-                vm.clearTestResult()
             }
         }
 
@@ -214,9 +215,9 @@ fun ProxyXApp() {
         var formMode by remember { mutableStateOf<FormMode?>(null) }
 
         val navColors = NavigationBarItemDefaults.colors(
-            selectedIconColor = Color(0xFF03110A),
-            selectedTextColor = AccentGreen,
-            indicatorColor = AccentGreen,
+            selectedIconColor = MaterialTheme.colorScheme.onPrimary,
+            selectedTextColor = MaterialTheme.colorScheme.primary,
+            indicatorColor = MaterialTheme.colorScheme.primary,
             unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
             unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -286,12 +287,18 @@ fun ProxyXApp() {
                     when (selectedTab) {
                         Tab.Home -> HomeScreen(
                             profiles = profiles,
-                            isConnected = isConnected,
-                            onToggleConnect = { vm.toggleConnect() },
                             selectedId = selectedId,
                             onSelect = { id -> vm.select(id) },
                             testingId = testingId,
-                            onTest = { vm.testProxy(it) }
+                            testResult = testResult,
+                            onTest = { vm.testProxy(it) },
+                            onRoute = {
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(
+                                        "Full device-wide routing is coming soon \u2014 for now, use Test connection to verify your proxy."
+                                    )
+                                }
+                            }
                         )
                         Tab.Profiles -> ProfilesScreen(
                             profiles = profiles,
@@ -305,7 +312,7 @@ fun ProxyXApp() {
                             onTest = { vm.testProxy(it) },
                             testingId = testingId
                         )
-                        Tab.Logs -> LogsScreen()
+                        Tab.Logs -> LogsScreen(logs = logs, onClear = { vm.clearLogs() })
                         Tab.Settings -> SettingsScreen(
                             settings = settings,
                             themeMode = themeMode,
@@ -321,16 +328,15 @@ fun ProxyXApp() {
 @Composable
 fun HomeScreen(
     profiles: List<ProxyProfile>,
-    isConnected: Boolean,
-    onToggleConnect: () -> Unit,
     selectedId: Int?,
     onSelect: (Int) -> Unit,
     testingId: Int?,
-    onTest: (ProxyProfile) -> Unit
+    testResult: TestOutcome?,
+    onTest: (ProxyProfile) -> Unit,
+    onRoute: () -> Unit
 ) {
     val selected = profiles.firstOrNull { it.id == selectedId } ?: profiles.firstOrNull()
     val favorites = profiles.filter { it.isFavorite }
-    val statusColor = if (isConnected) AccentGreen else Disconnected
 
     Column(
         modifier = Modifier
@@ -365,6 +371,21 @@ fun HomeScreen(
                 )
             }
         } else {
+            val isTesting = testingId == selected.id
+            val resultForThis = testResult?.takeIf { it.profileId == selected.id }
+            val statusColor = when {
+                isTesting -> MaterialTheme.colorScheme.onSurfaceVariant
+                resultForThis == null -> Disconnected
+                resultForThis.success -> MaterialTheme.colorScheme.primary
+                else -> MaterialTheme.colorScheme.error
+            }
+            val statusLabel = when {
+                isTesting -> "Testing…"
+                resultForThis == null -> "Not tested yet"
+                resultForThis.success -> "Reachable"
+                else -> "Not reachable"
+            }
+
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(20.dp),
@@ -372,10 +393,18 @@ fun HomeScreen(
             ) {
                 Column(modifier = Modifier.fillMaxWidth().padding(24.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(12.dp).clip(CircleShape).background(statusColor))
+                        if (isTesting) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(12.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        } else {
+                            Box(Modifier.size(12.dp).clip(CircleShape).background(statusColor))
+                        }
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            if (isConnected) "Connected" else "Not connected",
+                            statusLabel,
                             color = statusColor,
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.titleMedium
@@ -396,17 +425,13 @@ fun HomeScreen(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    if (isConnected) {
-                        Spacer(Modifier.height(20.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            StatItem("Ping", "38 ms")
-                            StatItem("Down", "12.4 MB/s")
-                            StatItem("Up", "3.1 MB/s")
-                            StatItem("Time", "00:14:22")
-                        }
+                    if (resultForThis != null && !isTesting) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            resultForThis.message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (resultForThis.success) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                        )
                     }
                 }
             }
@@ -414,38 +439,43 @@ fun HomeScreen(
             Spacer(Modifier.height(20.dp))
 
             Button(
-                onClick = onToggleConnect,
+                onClick = { onTest(selected) },
+                enabled = !isTesting,
                 modifier = Modifier.fillMaxWidth().height(54.dp),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isConnected) Disconnected else AccentGreen,
-                    contentColor = Color(0xFF03110A)
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
                 )
             ) {
-                Text(if (isConnected) "Disconnect" else "Connect", fontWeight = FontWeight.Bold)
+                if (isTesting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("Testing…", fontWeight = FontWeight.Bold)
+                } else {
+                    Text("Test connection", fontWeight = FontWeight.Bold)
+                }
             }
 
             Spacer(Modifier.height(12.dp))
 
-            val testing = testingId == selected.id
             OutlinedButton(
-                onClick = { onTest(selected) },
-                enabled = !testing,
+                onClick = onRoute,
                 modifier = Modifier.fillMaxWidth().height(50.dp),
                 shape = RoundedCornerShape(14.dp)
             ) {
-                if (testing) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        strokeWidth = 2.dp,
-                        color = AccentGreen
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text("Testing\u2026")
-                } else {
-                    Text("Test connection")
-                }
+                Text("Route all traffic")
             }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Full device-wide routing is coming soon.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
 
         Spacer(Modifier.height(28.dp))
@@ -473,20 +503,12 @@ fun HomeScreen(
 }
 
 @Composable
-fun StatItem(label: String, value: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyLarge)
-        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable
 fun FavoriteRow(profile: ProxyProfile, isActive: Boolean, onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable { onClick() },
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = if (isActive) BorderStroke(2.dp, AccentGreen) else null
+        border = if (isActive) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(14.dp),
@@ -511,7 +533,7 @@ fun FavoriteRow(profile: ProxyProfile, isActive: Boolean, onClick: () -> Unit) {
             }
             if (isActive) {
                 Spacer(Modifier.width(8.dp))
-                Text("Active", color = AccentGreen, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                Text("Active", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
             }
         }
     }
@@ -625,8 +647,8 @@ fun ProfilesScreen(
         }
         FloatingActionButton(
             onClick = onAdd,
-            containerColor = AccentGreen,
-            contentColor = Color(0xFF03110A),
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary,
             modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp)
         ) {
             Icon(Icons.Filled.Add, contentDescription = "Add profile")
@@ -673,7 +695,7 @@ fun ProfileCard(
         modifier = Modifier.fillMaxWidth().clickable { onClick() },
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = if (isActive) BorderStroke(2.dp, AccentGreen) else null
+        border = if (isActive) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
@@ -691,7 +713,7 @@ fun ProfileCard(
                     )
                     if (isActive) {
                         Spacer(Modifier.width(8.dp))
-                        Text("Active", color = AccentGreen, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                        Text("Active", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
                     }
                 }
                 Spacer(Modifier.height(6.dp))
@@ -699,12 +721,12 @@ fun ProfileCard(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(6.dp))
-                            .background(AccentGreen)
+                            .background(MaterialTheme.colorScheme.primary)
                             .padding(horizontal = 8.dp, vertical = 2.dp)
                     ) {
                         Text(
                             profile.type.name,
-                            color = Color(0xFF03110A),
+                            color = MaterialTheme.colorScheme.onPrimary,
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold
                         )
@@ -724,7 +746,7 @@ fun ProfileCard(
                 Icon(
                     imageVector = if (profile.isFavorite) Icons.Filled.Star else Icons.Filled.StarBorder,
                     contentDescription = "Favorite",
-                    tint = if (profile.isFavorite) AccentGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                    tint = if (profile.isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             Box {
@@ -835,7 +857,7 @@ fun ProfileFormScreen(
                         val credPart = if (preview.username.isNotEmpty()) "  |  user ${preview.username}" else ""
                         Text(
                             "Detected  ->  host ${preview.host}  |  port ${if (preview.port.isEmpty()) "?" else preview.port}$credPart",
-                            color = AccentGreen,
+                            color = MaterialTheme.colorScheme.primary,
                             style = MaterialTheme.typography.bodySmall
                         )
                     } else {
@@ -969,8 +991,8 @@ fun ProfileFormScreen(
                     },
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = AccentGreen,
-                        contentColor = Color(0xFF03110A)
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
                     )
                 ) {
                     Text("Save", fontWeight = FontWeight.Bold)
@@ -981,19 +1003,80 @@ fun ProfileFormScreen(
 }
 
 @Composable
-fun LogsScreen() {
+fun LogsScreen(logs: List<LogEntry>, onClear: () -> Unit) {
     Column(modifier = Modifier.fillMaxSize().padding(20.dp)) {
         Spacer(Modifier.height(20.dp))
-        Text("Logs", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(16.dp))
-        Card(
+        Row(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
+            Text("Logs", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            if (logs.isNotEmpty()) {
+                TextButton(onClick = onClear) { Text("Clear") }
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+        if (logs.isEmpty()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Text(
+                    "No logs yet. Test a proxy and the results — with time and latency — will appear here.",
+                    modifier = Modifier.padding(20.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(bottom = 24.dp)
+            ) {
+                items(logs) { entry -> LogRow(entry) }
+            }
+        }
+    }
+}
+
+@Composable
+fun LogRow(entry: LogEntry) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                Modifier.size(10.dp).clip(CircleShape)
+                    .background(if (entry.success) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+            )
+            Spacer(Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    entry.proxyName,
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    entry.message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Spacer(Modifier.width(8.dp))
             Text(
-                "No logs yet. Connection, error, authentication, DNS, and reconnection events will appear here.",
-                modifier = Modifier.padding(20.dp),
+                entry.timeText,
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
@@ -1074,7 +1157,7 @@ fun SettingsSection(title: String, content: @Composable () -> Unit) {
         title,
         style = MaterialTheme.typography.labelMedium,
         fontWeight = FontWeight.Bold,
-        color = AccentGreen,
+        color = MaterialTheme.colorScheme.primary,
         modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
     )
     Card(
