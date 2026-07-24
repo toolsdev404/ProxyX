@@ -48,6 +48,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -61,11 +62,14 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -128,6 +132,52 @@ private fun isValidDomain(host: String): Boolean {
 
 private fun isValidHost(host: String): Boolean = isValidIpv4(host) || isValidDomain(host)
 
+private data class ParsedProxy(
+    val host: String,
+    val port: String,
+    val username: String,
+    val password: String
+)
+
+// Best-effort parser for pasted proxy strings:
+//   host:port:user:pass   |   host:port   |   user:pass@host:port   |   one value per line
+private fun parseProxyString(raw: String): ParsedProxy? {
+    var text = raw.trim()
+    if (text.isEmpty()) return null
+
+    var atUser = ""
+    var atPass = ""
+    if (text.contains("@")) {
+        val halves = text.split("@", limit = 2)
+        val creds = halves[0].split(":")
+        if (creds.size >= 2) {
+            atUser = creds[0].trim()
+            atPass = creds[1].trim()
+        }
+        text = halves[1]
+    }
+
+    val tokens = text.split(Regex("[\\s:,|]+")).map { it.trim() }.filter { it.isNotEmpty() }
+    if (tokens.isEmpty()) return null
+
+    val hostIndex = tokens.indexOfFirst { isValidHost(it) }
+    if (hostIndex == -1) return null
+    val host = tokens[hostIndex]
+
+    val rest = tokens.toMutableList()
+    rest.removeAt(hostIndex)
+
+    val portIndex = rest.indexOfFirst { tok ->
+        tok.all { it.isDigit() } && (tok.toIntOrNull() ?: 0) in 1..65535
+    }
+    val port = if (portIndex >= 0) rest.removeAt(portIndex) else ""
+
+    val username = if (atUser.isNotEmpty()) atUser else rest.getOrNull(0) ?: ""
+    val password = if (atPass.isNotEmpty()) atPass else rest.getOrNull(1) ?: ""
+
+    return ParsedProxy(host, port, username, password)
+}
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -147,6 +197,17 @@ fun ProxyXApp() {
         val profiles by vm.profiles.collectAsState()
         val selectedId by vm.selectedId.collectAsState()
         val isConnected by vm.isConnected.collectAsState()
+        val testingId by vm.testingId.collectAsState()
+        val testResult by vm.testResult.collectAsState()
+        val snackbarHostState = remember { SnackbarHostState() }
+        LaunchedEffect(testResult) {
+            testResult?.let {
+                snackbarHostState.showSnackbar(
+                    (if (it.success) "\u2705 " else "\u274C ") + it.profileName + ": " + it.message
+                )
+                vm.clearTestResult()
+            }
+        }
 
         val settings = remember { SettingsState() }
         var selectedTab by remember { mutableStateOf(Tab.Home) }
@@ -187,6 +248,7 @@ fun ProxyXApp() {
             )
         } else {
             Scaffold(
+                snackbarHost = { SnackbarHost(snackbarHostState) },
                 bottomBar = {
                     NavigationBar {
                         NavigationBarItem(
@@ -227,7 +289,9 @@ fun ProxyXApp() {
                             isConnected = isConnected,
                             onToggleConnect = { vm.toggleConnect() },
                             selectedId = selectedId,
-                            onSelect = { id -> vm.select(id) }
+                            onSelect = { id -> vm.select(id) },
+                            testingId = testingId,
+                            onTest = { vm.testProxy(it) }
                         )
                         Tab.Profiles -> ProfilesScreen(
                             profiles = profiles,
@@ -237,7 +301,9 @@ fun ProxyXApp() {
                             onAdd = { formMode = FormMode.Add },
                             onEdit = { formMode = FormMode.Edit(it) },
                             onDuplicate = { formMode = FormMode.Duplicate(it) },
-                            onDelete = { p -> vm.deleteProfile(p) }
+                            onDelete = { p -> vm.deleteProfile(p) },
+                            onTest = { vm.testProxy(it) },
+                            testingId = testingId
                         )
                         Tab.Logs -> LogsScreen()
                         Tab.Settings -> SettingsScreen(
@@ -258,7 +324,9 @@ fun HomeScreen(
     isConnected: Boolean,
     onToggleConnect: () -> Unit,
     selectedId: Int?,
-    onSelect: (Int) -> Unit
+    onSelect: (Int) -> Unit,
+    testingId: Int?,
+    onTest: (ProxyProfile) -> Unit
 ) {
     val selected = profiles.firstOrNull { it.id == selectedId } ?: profiles.firstOrNull()
     val favorites = profiles.filter { it.isFavorite }
@@ -356,6 +424,28 @@ fun HomeScreen(
             ) {
                 Text(if (isConnected) "Disconnect" else "Connect", fontWeight = FontWeight.Bold)
             }
+
+            Spacer(Modifier.height(12.dp))
+
+            val testing = testingId == selected.id
+            OutlinedButton(
+                onClick = { onTest(selected) },
+                enabled = !testing,
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                if (testing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = AccentGreen
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("Testing\u2026")
+                } else {
+                    Text("Test connection")
+                }
+            }
         }
 
         Spacer(Modifier.height(28.dp))
@@ -436,7 +526,9 @@ fun ProfilesScreen(
     onAdd: () -> Unit,
     onEdit: (ProxyProfile) -> Unit,
     onDuplicate: (ProxyProfile) -> Unit,
-    onDelete: (ProxyProfile) -> Unit
+    onDelete: (ProxyProfile) -> Unit,
+    onTest: (ProxyProfile) -> Unit,
+    testingId: Int?
 ) {
     var query by remember { mutableStateOf("") }
     var sort by remember { mutableStateOf(SortOrder.Name) }
@@ -523,7 +615,9 @@ fun ProfilesScreen(
                             onFavorite = { onFavorite(profile) },
                             onEdit = { onEdit(profile) },
                             onDuplicate = { onDuplicate(profile) },
-                            onDelete = { profileToDelete = profile }
+                            onDelete = { profileToDelete = profile },
+                            onTest = { onTest(profile) },
+                            isTesting = testingId == profile.id
                         )
                     }
                 }
@@ -569,7 +663,9 @@ fun ProfileCard(
     onFavorite: () -> Unit,
     onEdit: () -> Unit,
     onDuplicate: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onTest: () -> Unit,
+    isTesting: Boolean
 ) {
     var menuOpen by remember { mutableStateOf(false) }
 
@@ -640,6 +736,7 @@ fun ProfileCard(
                     )
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(text = { Text(if (isTesting) "Testing\u2026" else "Test") }, onClick = { menuOpen = false; if (!isTesting) onTest() })
                     DropdownMenuItem(text = { Text("Edit") }, onClick = { menuOpen = false; onEdit() })
                     DropdownMenuItem(text = { Text("Duplicate") }, onClick = { menuOpen = false; onDuplicate() })
                     DropdownMenuItem(text = { Text("Delete") }, onClick = { menuOpen = false; onDelete() })
@@ -648,6 +745,8 @@ fun ProfileCard(
         }
     }
 }
+
+enum class EntryMode { Quick, Manual }
 
 @Composable
 fun ProfileFormScreen(
@@ -668,6 +767,8 @@ fun ProfileFormScreen(
     var password by remember { mutableStateOf(initial?.password ?: "") }
     var showPassword by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var pasteText by remember { mutableStateOf("") }
+    var mode by remember { mutableStateOf(if (initial != null) EntryMode.Manual else EntryMode.Quick) }
 
     Scaffold { innerPadding ->
         Column(
@@ -679,6 +780,20 @@ fun ProfileFormScreen(
                 .padding(24.dp)
         ) {
             Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(20.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = mode == EntryMode.Quick,
+                    onClick = { mode = EntryMode.Quick; error = null },
+                    label = { Text("Quick add") }
+                )
+                FilterChip(
+                    selected = mode == EntryMode.Manual,
+                    onClick = { mode = EntryMode.Manual; error = null },
+                    label = { Text("Manual") }
+                )
+            }
             Spacer(Modifier.height(20.dp))
 
             OutlinedTextField(
@@ -703,62 +818,89 @@ fun ProfileFormScreen(
             }
             Spacer(Modifier.height(16.dp))
 
-            OutlinedTextField(
-                value = host,
-                onValueChange = { host = it.trim() },
-                label = { Text("Host — IP or domain") },
-                supportingText = { Text("e.g. 203.0.113.5 or proxy.example.com") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(16.dp))
-
-            OutlinedTextField(
-                value = port,
-                onValueChange = { new -> port = new.filter { it.isDigit() }.take(5) },
-                label = { Text("Port") },
-                supportingText = { Text("Numbers only, 1–65535") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(16.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text("Requires authentication", style = MaterialTheme.typography.bodyLarge)
-                Switch(checked = requiresAuth, onCheckedChange = { requiresAuth = it })
-            }
-
-            if (requiresAuth) {
-                Spacer(Modifier.height(16.dp))
+            if (mode == EntryMode.Quick) {
                 OutlinedTextField(
-                    value = username,
-                    onValueChange = { username = it },
-                    label = { Text("Username") },
+                    value = pasteText,
+                    onValueChange = { pasteText = it; error = null },
+                    label = { Text("Paste proxy") },
+                    placeholder = { Text("host:port:user:pass") },
+                    supportingText = { Text("Also: host:port  |  user:pass@host:port  |  one value per line") },
+                    minLines = 3,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                val preview = parseProxyString(pasteText)
+                if (pasteText.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    if (preview != null) {
+                        val credPart = if (preview.username.isNotEmpty()) "  |  user ${preview.username}" else ""
+                        Text(
+                            "Detected  ->  host ${preview.host}  |  port ${if (preview.port.isEmpty()) "?" else preview.port}$credPart",
+                            color = AccentGreen,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    } else {
+                        Text(
+                            "Couldn't read that yet - check the format above.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            } else {
+                OutlinedTextField(
+                    value = host,
+                    onValueChange = { value -> host = value.filter { c -> c.code in 33..126 } },
+                    label = { Text("Host - IP or domain") },
+                    supportingText = { Text("e.g. 203.0.113.5 or proxy.example.com") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(16.dp))
                 OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it },
-                    label = { Text("Password") },
+                    value = port,
+                    onValueChange = { new -> port = new.filter { it.isDigit() }.take(5) },
+                    label = { Text("Port") },
+                    supportingText = { Text("Numbers only, 1-65535") },
                     singleLine = true,
-                    visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
-                    trailingIcon = {
-                        IconButton(onClick = { showPassword = !showPassword }) {
-                            Icon(
-                                imageVector = if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                                contentDescription = if (showPassword) "Hide password" else "Show password"
-                            )
-                        }
-                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth()
                 )
+                Spacer(Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Requires authentication", style = MaterialTheme.typography.bodyLarge)
+                    Switch(checked = requiresAuth, onCheckedChange = { requiresAuth = it })
+                }
+                if (requiresAuth) {
+                    Spacer(Modifier.height(16.dp))
+                    OutlinedTextField(
+                        value = username,
+                        onValueChange = { username = it },
+                        label = { Text("Username") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it },
+                        label = { Text("Password") },
+                        singleLine = true,
+                        visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { showPassword = !showPassword }) {
+                                Icon(
+                                    imageVector = if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                    contentDescription = if (showPassword) "Hide password" else "Show password"
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
 
             error?.let { msg ->
@@ -778,38 +920,51 @@ fun ProfileFormScreen(
                 Button(
                     onClick = {
                         val cleanName = name.trim()
-                        val cleanHost = host.trim()
-                        val portNum = port.toIntOrNull()
-                        val isDuplicate = portNum != null && existing.any {
-                            it.id != excludeId &&
-                                    it.host.equals(cleanHost, ignoreCase = true) &&
-                                    it.port == portNum
-                        }
+                        val parsed = if (mode == EntryMode.Quick) parseProxyString(pasteText) else null
                         when {
                             cleanName.isBlank() -> error = "Name is required"
-                            cleanHost.isBlank() -> error = "Host is required"
-                            cleanHost.contains(":") ->
-                                error = "Enter only the address in Host (no port). Put the port in the Port field."
-                            !isValidHost(cleanHost) ->
-                                error = "Enter a valid IP (e.g. 203.0.113.5) or domain (e.g. proxy.example.com)"
-                            portNum == null || portNum !in 1..65535 ->
-                                error = "Port must be a number from 1 to 65535"
-                            isDuplicate -> error = "A proxy with this host and port already exists"
-                            requiresAuth && username.isBlank() -> error = "Username is required for authentication"
-                            requiresAuth && password.isBlank() -> error = "Password is required for authentication"
-                            else -> onSave(
-                                ProxyProfile(
-                                    id = assignId,
-                                    name = cleanName,
-                                    type = type,
-                                    host = cleanHost,
-                                    port = portNum,
-                                    requiresAuth = requiresAuth,
-                                    username = username.trim(),
-                                    password = password,
-                                    isFavorite = initial?.isFavorite ?: false
-                                )
-                            )
+                            mode == EntryMode.Quick && parsed == null ->
+                                error = "Paste a proxy like  host:port:user:pass"
+                            else -> {
+                                val h = (parsed?.host ?: host).filter { c -> c.code in 33..126 }
+                                val p = parsed?.port ?: port
+                                val auth = if (parsed != null)
+                                    (parsed.username.isNotEmpty() || parsed.password.isNotEmpty())
+                                else requiresAuth
+                                val u = parsed?.username ?: username
+                                val pw = parsed?.password ?: password
+                                val portNum = p.toIntOrNull()
+                                val isDuplicate = portNum != null && existing.any {
+                                    it.id != excludeId &&
+                                            it.host.equals(h, ignoreCase = true) &&
+                                            it.port == portNum
+                                }
+                                when {
+                                    h.isBlank() -> error = "Host is required"
+                                    h.contains(":") ->
+                                        error = "Host shouldn't contain ':' - use host:port:user:pass in Quick add"
+                                    !isValidHost(h) ->
+                                        error = "Enter a valid IP (e.g. 203.0.113.5) or domain (e.g. proxy.example.com)"
+                                    portNum == null || portNum !in 1..65535 ->
+                                        error = "Port must be a number from 1 to 65535"
+                                    isDuplicate -> error = "A proxy with this host and port already exists"
+                                    auth && u.isBlank() -> error = "Username is required for authentication"
+                                    auth && pw.isBlank() -> error = "Password is required for authentication"
+                                    else -> onSave(
+                                        ProxyProfile(
+                                            id = assignId,
+                                            name = cleanName,
+                                            type = type,
+                                            host = h,
+                                            port = portNum,
+                                            requiresAuth = auth,
+                                            username = u.trim(),
+                                            password = pw,
+                                            isFavorite = initial?.isFavorite ?: false
+                                        )
+                                    )
+                                }
+                            }
                         }
                     },
                     modifier = Modifier.weight(1f),
