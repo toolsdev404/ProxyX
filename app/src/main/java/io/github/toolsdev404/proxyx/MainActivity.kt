@@ -100,13 +100,6 @@ sealed interface FormMode {
 
 enum class SortOrder { Name, Type, Favorites }
 
-class SettingsState {
-    var autoConnect by mutableStateOf(false)
-    var autoReconnect by mutableStateOf(true)
-    var notifications by mutableStateOf(true)
-    var background by mutableStateOf(true)
-}
-
 enum class Tab { Home, Profiles, Logs, Settings }
 
 private fun isValidIpv4(host: String): Boolean {
@@ -232,7 +225,10 @@ fun ProxyXApp() {
             }
         }
 
-        val settings = remember { SettingsState() }
+        val autoConnect by vm.autoConnect.collectAsState()
+        val autoReconnect by vm.autoReconnect.collectAsState()
+        val notifications by vm.notifications.collectAsState()
+        val background by vm.background.collectAsState()
         var selectedTab by remember { mutableStateOf(Tab.Home) }
         var formMode by remember { mutableStateOf<FormMode?>(null) }
 
@@ -336,7 +332,14 @@ fun ProxyXApp() {
                         )
                         Tab.Logs -> LogsScreen(logs = logs, onClear = { vm.clearLogs() })
                         Tab.Settings -> SettingsScreen(
-                            settings = settings,
+                            autoConnect = autoConnect,
+                            onAutoConnect = { vm.setAutoConnect(it) },
+                            autoReconnect = autoReconnect,
+                            onAutoReconnect = { vm.setAutoReconnect(it) },
+                            notifications = notifications,
+                            onNotifications = { vm.setNotifications(it) },
+                            background = background,
+                            onBackground = { vm.setBackground(it) },
                             themeMode = themeMode,
                             onSetTheme = { vm.setThemeMode(it) }
                         )
@@ -1153,7 +1156,14 @@ fun LogRow(entry: LogEntry) {
 
 @Composable
 fun SettingsScreen(
-    settings: SettingsState,
+    autoConnect: Boolean,
+    onAutoConnect: (Boolean) -> Unit,
+    autoReconnect: Boolean,
+    onAutoReconnect: (Boolean) -> Unit,
+    notifications: Boolean,
+    onNotifications: (Boolean) -> Unit,
+    background: Boolean,
+    onBackground: (Boolean) -> Unit,
     themeMode: ThemeMode,
     onSetTheme: (ThemeMode) -> Unit
 ) {
@@ -1198,15 +1208,15 @@ fun SettingsScreen(
         }
 
         SettingsSection("CONNECTION") {
-            SettingSwitch("Auto-connect on launch", settings.autoConnect) { settings.autoConnect = it }
+            SettingSwitch("Auto-connect on launch", autoConnect) { onAutoConnect(it) }
             SettingsDivider()
-            SettingSwitch("Auto-reconnect", settings.autoReconnect) { settings.autoReconnect = it }
+            SettingSwitch("Auto-reconnect", autoReconnect) { onAutoReconnect(it) }
         }
 
         SettingsSection("NOTIFICATIONS & SERVICE") {
-            SettingSwitch("Notifications", settings.notifications) { settings.notifications = it }
+            SettingSwitch("Notifications", notifications) { onNotifications(it) }
             SettingsDivider()
-            SettingSwitch("Keep running in background", settings.background) { settings.background = it }
+            SettingSwitch("Keep running in background", background) { onBackground(it) }
         }
 
         SettingsSection("ABOUT") {

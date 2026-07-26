@@ -4,6 +4,8 @@ import android.app.Application
 import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -186,14 +188,31 @@ private val Context.dataStore by preferencesDataStore(name = "settings")
 
 class SettingsRepository(private val context: Context) {
     private val themeKey = stringPreferencesKey("theme_mode")
+    private val autoConnectKey = booleanPreferencesKey("auto_connect")
+    private val autoReconnectKey = booleanPreferencesKey("auto_reconnect")
+    private val notificationsKey = booleanPreferencesKey("notifications")
+    private val backgroundKey = booleanPreferencesKey("background")
+    private val selectedIdKey = intPreferencesKey("selected_id")
 
     val themeMode: Flow<ThemeMode> = context.dataStore.data.map { prefs ->
         runCatching { ThemeMode.valueOf(prefs[themeKey] ?: ThemeMode.System.name) }
             .getOrDefault(ThemeMode.System)
     }
+    val autoConnect: Flow<Boolean> = context.dataStore.data.map { it[autoConnectKey] ?: false }
+    val autoReconnect: Flow<Boolean> = context.dataStore.data.map { it[autoReconnectKey] ?: true }
+    val notifications: Flow<Boolean> = context.dataStore.data.map { it[notificationsKey] ?: true }
+    val background: Flow<Boolean> = context.dataStore.data.map { it[backgroundKey] ?: true }
+    val selectedId: Flow<Int?> = context.dataStore.data.map { it[selectedIdKey] }
 
-    suspend fun setThemeMode(mode: ThemeMode) {
-        context.dataStore.edit { it[themeKey] = mode.name }
+    suspend fun setThemeMode(mode: ThemeMode) { context.dataStore.edit { it[themeKey] = mode.name } }
+    suspend fun setAutoConnect(v: Boolean) { context.dataStore.edit { it[autoConnectKey] = v } }
+    suspend fun setAutoReconnect(v: Boolean) { context.dataStore.edit { it[autoReconnectKey] = v } }
+    suspend fun setNotifications(v: Boolean) { context.dataStore.edit { it[notificationsKey] = v } }
+    suspend fun setBackground(v: Boolean) { context.dataStore.edit { it[backgroundKey] = v } }
+    suspend fun setSelectedId(id: Int?) {
+        context.dataStore.edit { prefs ->
+            if (id == null) prefs.remove(selectedIdKey) else prefs[selectedIdKey] = id
+        }
     }
 }
 
@@ -226,11 +245,17 @@ class ProxyViewModel(app: Application) : AndroidViewModel(app) {
     val themeMode: StateFlow<ThemeMode> =
         settingsRepo.themeMode.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ThemeMode.System)
 
-    private val _selectedId = MutableStateFlow<Int?>(null)
-    val selectedId: StateFlow<Int?> = _selectedId.asStateFlow()
+    val selectedId: StateFlow<Int?> =
+        settingsRepo.selectedId.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    private val _isConnected = MutableStateFlow(false)
-    val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
+    val autoConnect: StateFlow<Boolean> =
+        settingsRepo.autoConnect.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+    val autoReconnect: StateFlow<Boolean> =
+        settingsRepo.autoReconnect.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+    val notifications: StateFlow<Boolean> =
+        settingsRepo.notifications.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+    val background: StateFlow<Boolean> =
+        settingsRepo.background.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
 
     private val _testingId = MutableStateFlow<Int?>(null)
     val testingId: StateFlow<Int?> = _testingId.asStateFlow()
@@ -242,14 +267,17 @@ class ProxyViewModel(app: Application) : AndroidViewModel(app) {
     val logs: StateFlow<List<LogEntry>> = _logs.asStateFlow()
 
     fun setThemeMode(mode: ThemeMode) = viewModelScope.launch { settingsRepo.setThemeMode(mode) }
-    fun select(id: Int) { _selectedId.value = id; _isConnected.value = false }
-    fun toggleConnect() { _isConnected.value = !_isConnected.value }
+    fun select(id: Int) = viewModelScope.launch { settingsRepo.setSelectedId(id) }
+    fun setAutoConnect(v: Boolean) = viewModelScope.launch { settingsRepo.setAutoConnect(v) }
+    fun setAutoReconnect(v: Boolean) = viewModelScope.launch { settingsRepo.setAutoReconnect(v) }
+    fun setNotifications(v: Boolean) = viewModelScope.launch { settingsRepo.setNotifications(v) }
+    fun setBackground(v: Boolean) = viewModelScope.launch { settingsRepo.setBackground(v) }
     fun addProfile(p: ProxyProfile) = viewModelScope.launch { repo.add(p.copy(id = 0)) }
     fun updateProfile(p: ProxyProfile) = viewModelScope.launch { repo.update(p) }
     fun toggleFavorite(p: ProxyProfile) = viewModelScope.launch { repo.update(p.copy(isFavorite = !p.isFavorite)) }
     fun deleteProfile(p: ProxyProfile) = viewModelScope.launch {
         repo.delete(p)
-        if (_selectedId.value == p.id) { _selectedId.value = null; _isConnected.value = false }
+        if (selectedId.value == p.id) settingsRepo.setSelectedId(null)
     }
 
     fun testProxy(p: ProxyProfile) {
