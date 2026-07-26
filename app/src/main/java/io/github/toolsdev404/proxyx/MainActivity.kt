@@ -1,10 +1,16 @@
 package io.github.toolsdev404.proxyx
 
+import android.Manifest
+import android.app.Activity
+import android.net.VpnService
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -70,7 +76,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -79,6 +84,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -88,7 +94,6 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import kotlinx.coroutines.launch
 import io.github.toolsdev404.proxyx.ui.theme.Disconnected
 import io.github.toolsdev404.proxyx.ui.theme.ProxyXTheme
 
@@ -216,7 +221,30 @@ fun ProxyXApp() {
         val testResult by vm.testResult.collectAsState()
         val logs by vm.logs.collectAsState()
         val snackbarHostState = remember { SnackbarHostState() }
-        val scope = rememberCoroutineScope()
+        val context = LocalContext.current
+        val vpnRunning by VpnState.running.collectAsState()
+        val vpnConsentLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.StartActivityForResult()
+        ) { result ->
+            if (result.resultCode == Activity.RESULT_OK) ProxyVpnService.start(context)
+        }
+        val notifPermissionLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { }
+        LaunchedEffect(Unit) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+        val onToggleVpn: () -> Unit = {
+            if (vpnRunning) {
+                ProxyVpnService.stop(context)
+            } else {
+                val prepare = VpnService.prepare(context)
+                if (prepare != null) vpnConsentLauncher.launch(prepare)
+                else ProxyVpnService.start(context)
+            }
+        }
         LaunchedEffect(testResult) {
             testResult?.let {
                 snackbarHostState.showSnackbar(
@@ -310,13 +338,8 @@ fun ProxyXApp() {
                             testingId = testingId,
                             testResult = testResult,
                             onTest = { vm.testProxy(it) },
-                            onRoute = {
-                                scope.launch {
-                                    snackbarHostState.showSnackbar(
-                                        "Full device-wide routing is coming soon \u2014 for now, use Test connection to verify your proxy."
-                                    )
-                                }
-                            }
+                            onRoute = onToggleVpn,
+                            vpnRunning = vpnRunning
                         )
                         Tab.Profiles -> ProfilesScreen(
                             profiles = profiles,
@@ -358,7 +381,8 @@ fun HomeScreen(
     testingId: Int?,
     testResult: TestOutcome?,
     onTest: (ProxyProfile) -> Unit,
-    onRoute: () -> Unit
+    onRoute: () -> Unit,
+    vpnRunning: Boolean
 ) {
     val selected = profiles.firstOrNull { it.id == selectedId } ?: profiles.firstOrNull()
     val favorites = profiles.filter { it.isFavorite }
@@ -493,11 +517,14 @@ fun HomeScreen(
                 modifier = Modifier.fillMaxWidth().height(50.dp),
                 shape = RoundedCornerShape(14.dp)
             ) {
-                Text("Route all traffic")
+                Text(if (vpnRunning) "Stop routing" else "Route all traffic")
             }
             Spacer(Modifier.height(6.dp))
             Text(
-                "Full device-wide routing is coming soon.",
+                if (vpnRunning)
+                    "VPN tunnel is ON. Proxy routing isn't wired in yet \u2014 that's the next step."
+                else
+                    "Full device-wide routing is coming soon.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
