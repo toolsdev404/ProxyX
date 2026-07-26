@@ -21,6 +21,7 @@
 #include "hev-main.h"
 
 #include "hev-jni.h"
+#include "hev-blocklist.h"
 
 /* clang-format off */
 #ifndef PKGNAME
@@ -57,11 +58,11 @@ static jboolean native_is_running (JNIEnv *env, jobject thiz);
 static jlongArray native_get_stats (JNIEnv *env, jobject thiz);
 
 static JNINativeMethod native_methods[] = {
-    { "TProxyStartService", "(Ljava/lang/String;I)Z",
-      (void *)native_start_service },
-    { "TProxyStopService", "()Z", (void *)native_stop_service },
-    { "TProxyIsRunning", "()Z", (void *)native_is_running },
-    { "TProxyGetStats", "()[J", (void *)native_get_stats },
+        { "TProxyStartService", "(Ljava/lang/String;I)Z",
+                                      (void *)native_start_service },
+        { "TProxyStopService", "()Z", (void *)native_stop_service },
+        { "TProxyIsRunning", "()Z", (void *)native_is_running },
+        { "TProxyGetStats", "()[J", (void *)native_get_stats },
 };
 
 static void
@@ -92,12 +93,35 @@ JNI_OnLoad (JavaVM *vm, void *reserved)
     return JNI_VERSION_1_4;
 }
 
+static void
+proxyx_load_lists (const char *config_path)
+{
+    char block[1024];
+    char allow[1024];
+    const char *slash;
+    size_t dir;
+
+    slash = strrchr (config_path, '/');
+    dir = slash ? (size_t) (slash - config_path + 1) : 0;
+    if (dir > 900)
+        dir = 0;
+    memcpy (block, config_path, dir);
+    strcpy (block + dir, "blocklist.txt");
+    memcpy (allow, config_path, dir);
+    strcpy (allow + dir, "allowlist.txt");
+    hev_blocklist_load (block, allow);
+}
+
 static void *
 thread_handler (void *data)
 {
     ThreadData *tdata = data;
 
+    proxyx_load_lists (tdata->path);
+
     hev_socks5_tunnel_main (tdata->path, tdata->fd);
+
+    hev_blocklist_unload ();
 
     atomic_store_explicit (&is_running, 0, memory_order_release);
 
@@ -153,7 +177,7 @@ native_start_service (JNIEnv *env, jobject thiz, jstring config_path, jint fd)
 
     thread_joinable = 1;
     result = JNI_TRUE;
-exit:
+    exit:
     pthread_mutex_unlock (&mutex);
     return result;
 }
@@ -174,7 +198,7 @@ native_stop_service (JNIEnv *env, jobject thiz)
 
     thread_joinable = 0;
     atomic_store_explicit (&is_running, 0, memory_order_release);
-exit:
+    exit:
     pthread_mutex_unlock (&mutex);
     return res == 0 ? JNI_TRUE : JNI_FALSE;
 }
@@ -183,7 +207,7 @@ static jboolean
 native_is_running (JNIEnv *env, jobject thiz)
 {
     return atomic_load_explicit (&is_running, memory_order_acquire) ? JNI_TRUE :
-                                                                      JNI_FALSE;
+           JNI_FALSE;
 }
 
 static jlongArray

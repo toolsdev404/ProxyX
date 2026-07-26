@@ -97,6 +97,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.toolsdev404.proxyx.ui.theme.Disconnected
 import io.github.toolsdev404.proxyx.ui.theme.ProxyXTheme
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 
 sealed interface FormMode {
     object Add : FormMode
@@ -241,6 +243,16 @@ fun ProxyXApp() {
                 notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
+        val scope = rememberCoroutineScope()
+        val selectProxy: (Int) -> Unit = { id ->
+            if (vpnRunning && id != selectedId) {
+                scope.launch {
+                    snackbarHostState.showSnackbar("Stop routing first, then switch proxy")
+                }
+            } else {
+                vm.select(id)
+            }
+        }
         val onToggleVpn: () -> Unit = {
             if (vpnRunning) {
                 ProxyVpnService.stop(context)
@@ -352,7 +364,7 @@ fun ProxyXApp() {
                         Tab.Home -> HomeScreen(
                             profiles = profiles,
                             selectedId = selectedId,
-                            onSelect = { id -> vm.select(id) },
+                            onSelect = { id -> selectProxy(id) },
                             testingId = testingId,
                             testResult = testResult,
                             onTest = { vm.testProxy(it) },
@@ -362,7 +374,7 @@ fun ProxyXApp() {
                         Tab.Profiles -> ProfilesScreen(
                             profiles = profiles,
                             activeId = selectedId,
-                            onSelect = { p -> vm.select(p.id) },
+                            onSelect = { p -> selectProxy(p.id) },
                             onFavorite = { p -> vm.toggleFavorite(p) },
                             onAdd = { formMode = FormMode.Add },
                             onEdit = { formMode = FormMode.Edit(it) },

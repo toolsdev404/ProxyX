@@ -216,6 +216,9 @@ class ProxyVpnService : VpnService() {
             val file = File(filesDir, "hev-socks5-tunnel.yaml")
             file.writeText(buildConfig(host, port, user, pass))
             configFile = file
+            // Step 1 TEST scaffolding — Step 3 replaces these with the user's settings.
+            File(filesDir, "blocklist.txt").writeText("example.com\ndoubleclick.net\n")
+            File(filesDir, "allowlist.txt").writeText("www.example.com\n")
             TProxyService.TProxyStartService(file.absolutePath, descriptor.fd)
         } catch (e: Throwable) {
             false
@@ -363,8 +366,13 @@ class ProxyVpnService : VpnService() {
     }
 
     private fun postDnsAlert(dnsName: String) {
-        val text = "Your Private DNS ($dnsName) may be blocked by this proxy. " +
-                "Open Network & internet ▸ Private DNS and set it to Off or Automatic, then reconnect."
+        val text = "Your Private DNS ($dnsName) is blocking the proxy, so websites can't load. " +
+                "To fix it:\n" +
+                "1. Open your phone's Settings\n" +
+                "2. Search for \"Private DNS\"\n" +
+                "3. Set it to Off (or Automatic)\n" +
+                "4. Come back and tap Route all traffic again\n" +
+                "Tap here to open Settings. (ProxyX keeps your DNS private through the proxy anyway.)"
         val tapIntent = try {
             Intent(Settings.ACTION_WIRELESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         } catch (_: Throwable) {

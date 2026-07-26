@@ -18,6 +18,7 @@
 #include "hev-logger.h"
 
 #include "hev-mapped-dns.h"
+#include "hev-blocklist.h"
 
 static HevMappedDNS *singleton;
 
@@ -226,12 +227,16 @@ hev_mapped_dns_handle (HevMappedDNS *self, void *req, int qlen, void *res,
             return -1;
 
         if ((read_u16 (&rb[off + 0]) == 1) && (read_u16 (&rb[off + 2]) == 1)) {
-            int idx;
+            const char *qname = (const char *)&rb[ipo[ipn] + 1];
 
-            idx = hev_mapped_dns_find (self, (char *)&rb[ipo[ipn] + 1]);
-            if (idx >= 0) {
-                ips[ipn] = self->net | idx;
-                ipn++;
+            if (!hev_blocklist_is_blocked (qname)) {
+                int idx;
+
+                idx = hev_mapped_dns_find (self, qname);
+                if (idx >= 0) {
+                    ips[ipn] = self->net | idx;
+                    ipn++;
+                }
             }
         }
 
