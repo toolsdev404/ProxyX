@@ -1,11 +1,15 @@
 package io.github.toolsdev404.proxyx.ui.theme
 
+import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 import io.github.toolsdev404.proxyx.ThemeMode
 
 // Bright green reads well on the dark surfaces.
@@ -62,6 +66,19 @@ fun ProxyXTheme(
         ThemeMode.Light -> false
         ThemeMode.System -> isSystemInDarkTheme()
     }
+
+    // Keep the status-bar / nav-bar icons legible for the app's own theme
+    // (not the system theme), since we draw edge-to-edge.
+    val view = LocalView.current
+    if (!view.isInEditMode) {
+        SideEffect {
+            val window = (view.context as Activity).window
+            val controller = WindowCompat.getInsetsController(window, view)
+            controller.isAppearanceLightStatusBars = !dark
+            controller.isAppearanceLightNavigationBars = !dark
+        }
+    }
+
     MaterialTheme(
         colorScheme = if (dark) DarkColors else LightColors,
         typography = Typography,

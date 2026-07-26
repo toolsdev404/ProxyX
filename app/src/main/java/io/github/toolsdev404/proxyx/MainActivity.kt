@@ -140,43 +140,65 @@ private data class ParsedProxy(
     val password: String
 )
 
-// Best-effort parser for pasted proxy strings:
-//   host:port:user:pass   |   host:port   |   user:pass@host:port   |   one value per line
+// Best-effort parser for pasted proxy strings. Handles:
+//   host:port:user:pass  |  host:port  |  user:pass@host:port  |  one value per line
+//   optional scheme (socks5://, http://) and passwords containing ':' or '@'.
 private fun parseProxyString(raw: String): ParsedProxy? {
     var text = raw.trim()
     if (text.isEmpty()) return null
+    text = text.replaceFirst(Regex("^[A-Za-z][A-Za-z0-9+.\\-]*://"), "")
 
-    var atUser = ""
-    var atPass = ""
+    // user:pass@host:port  (only when the part after '@' is a valid host)
     if (text.contains("@")) {
-        val halves = text.split("@", limit = 2)
-        val creds = halves[0].split(":")
-        if (creds.size >= 2) {
-            atUser = creds[0].trim()
-            atPass = creds[1].trim()
+        val at = text.split("@", limit = 2)
+        val creds = at[0].split(":", limit = 2)
+        val server = at[1].trim().split(Regex("[\\s:]+")).filter { it.isNotEmpty() }
+        val host = server.getOrNull(0) ?: ""
+        if (isValidHost(host)) {
+            return ParsedProxy(
+                host = host,
+                port = server.getOrNull(1) ?: "",
+                username = creds.getOrNull(0)?.trim() ?: "",
+                password = creds.getOrNull(1)?.trim() ?: ""
+            )
         }
-        text = halves[1]
+        // otherwise the '@' belongs to a password -> fall through
     }
 
+    // Single-line colon form: host:port:user:pass (password may contain ':')
+    if (text.none { it.isWhitespace() } && text.contains(":")) {
+        val parts = text.split(":")
+        if (parts.size >= 2 &&
+            isValidHost(parts[0].trim()) &&
+            parts[1].trim().toIntOrNull() != null
+        ) {
+            return ParsedProxy(
+                host = parts[0].trim(),
+                port = parts[1].trim(),
+                username = parts.getOrNull(2)?.trim() ?: "",
+                password = if (parts.size > 3) parts.drop(3).joinToString(":") else ""
+            )
+        }
+    }
+
+    // General fallback: whitespace / newline / mixed separators
     val tokens = text.split(Regex("[\\s:,|]+")).map { it.trim() }.filter { it.isNotEmpty() }
     if (tokens.isEmpty()) return null
-
     val hostIndex = tokens.indexOfFirst { isValidHost(it) }
     if (hostIndex == -1) return null
     val host = tokens[hostIndex]
-
     val rest = tokens.toMutableList()
     rest.removeAt(hostIndex)
-
     val portIndex = rest.indexOfFirst { tok ->
         tok.all { it.isDigit() } && (tok.toIntOrNull() ?: 0) in 1..65535
     }
     val port = if (portIndex >= 0) rest.removeAt(portIndex) else ""
-
-    val username = if (atUser.isNotEmpty()) atUser else rest.getOrNull(0) ?: ""
-    val password = if (atPass.isNotEmpty()) atPass else rest.getOrNull(1) ?: ""
-
-    return ParsedProxy(host, port, username, password)
+    return ParsedProxy(
+        host = host,
+        port = port,
+        username = rest.getOrNull(0) ?: "",
+        password = rest.getOrNull(1) ?: ""
+    )
 }
 
 class MainActivity : ComponentActivity() {
@@ -440,7 +462,7 @@ fun HomeScreen(
 
             Button(
                 onClick = { onTest(selected) },
-                enabled = !isTesting,
+                enabled = testingId == null,
                 modifier = Modifier.fillMaxWidth().height(54.dp),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(
@@ -771,6 +793,26 @@ fun ProfileCard(
 enum class EntryMode { Quick, Manual }
 
 @Composable
+fun FormatExample(text: String) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(vertical = 2.dp)
+    ) {
+        Text(
+            "\u2022  ",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Text(
+            text,
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = FontFamily.Monospace,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+    }
+}
+
+@Composable
 fun ProfileFormScreen(
     title: String,
     initial: ProxyProfile?,
@@ -846,7 +888,6 @@ fun ProfileFormScreen(
                     onValueChange = { pasteText = it; error = null },
                     label = { Text("Paste proxy") },
                     placeholder = { Text("host:port:user:pass") },
-                    supportingText = { Text("Also: host:port  |  user:pass@host:port  |  one value per line") },
                     minLines = 3,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -862,9 +903,34 @@ fun ProfileFormScreen(
                         )
                     } else {
                         Text(
-                            "Couldn't read that yet - check the format above.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            "Couldn't read that yet - try one of the formats below.",
+                            color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth().padding(14.dp)) {
+                        Text(
+                            "Supported formats",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        FormatExample("host:port:user:pass")
+                        FormatExample("host:port")
+                        FormatExample("user:pass@host:port")
+                        FormatExample("one value per line")
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "socks5:// or http:// prefixes are fine. Hidden characters are removed automatically.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -958,8 +1024,10 @@ fun ProfileFormScreen(
                                 val portNum = p.toIntOrNull()
                                 val isDuplicate = portNum != null && existing.any {
                                     it.id != excludeId &&
+                                            it.type == type &&
                                             it.host.equals(h, ignoreCase = true) &&
-                                            it.port == portNum
+                                            it.port == portNum &&
+                                            it.username.trim() == u.trim()
                                 }
                                 when {
                                     h.isBlank() -> error = "Host is required"
@@ -969,7 +1037,7 @@ fun ProfileFormScreen(
                                         error = "Enter a valid IP (e.g. 203.0.113.5) or domain (e.g. proxy.example.com)"
                                     portNum == null || portNum !in 1..65535 ->
                                         error = "Port must be a number from 1 to 65535"
-                                    isDuplicate -> error = "A proxy with this host and port already exists"
+                                    isDuplicate -> error = "This proxy is already saved (same type, host, port, and username)"
                                     auth && u.isBlank() -> error = "Username is required for authentication"
                                     auth && pw.isBlank() -> error = "Password is required for authentication"
                                     else -> onSave(
