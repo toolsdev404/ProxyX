@@ -45,6 +45,14 @@ import java.util.concurrent.TimeUnit
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
+import java.security.KeyStore
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 
 enum class ProxyType { SOCKS5, HTTP, HTTPS }
 
@@ -73,6 +81,9 @@ interface ProxyDao {
     @Query("SELECT * FROM profiles ORDER BY name COLLATE NOCASE")
     fun getAll(): Flow<List<ProxyProfile>>
 
+    @Query("SELECT * FROM profiles")
+    suspend fun getAllOnce(): List<ProxyProfile>
+
     @Insert suspend fun insert(profile: ProxyProfile): Long
     @Update suspend fun update(profile: ProxyProfile)
     @Delete suspend fun delete(profile: ProxyProfile)
@@ -96,11 +107,78 @@ abstract class AppDatabase : RoomDatabase() {
     }
 }
 
+// AES-256-GCM encryption backed by the Android Keystore. The key never leaves the device
+// and is not extractable, so stored proxy passwords are ciphertext at rest.
+object Crypto {
+    private const val KEY_ALIAS = "proxyx_pw_key"
+    private const val PREFIX = "enc1:"
+    private const val TRANSFORM = "AES/GCM/NoPadding"
+    private const val IV_LEN = 12
+    private const val TAG_BITS = 128
+
+    private fun secretKey(): SecretKey {
+        val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        val existing = ks.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry
+        if (existing != null) return existing.secretKey
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        generator.init(
+            KeyGenParameterSpec.Builder(
+                KEY_ALIAS,
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+            )
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(256)
+                .build()
+        )
+        return generator.generateKey()
+    }
+
+    fun isEncrypted(value: String): Boolean = value.startsWith(PREFIX)
+
+    fun encrypt(plain: String): String {
+        if (plain.isEmpty()) return ""
+        return try {
+            val cipher = Cipher.getInstance(TRANSFORM)
+            cipher.init(Cipher.ENCRYPT_MODE, secretKey())
+            val iv = cipher.iv
+            val cipherText = cipher.doFinal(plain.toByteArray(Charsets.UTF_8))
+            PREFIX + Base64.encodeToString(iv + cipherText, Base64.NO_WRAP)
+        } catch (e: Exception) {
+            plain
+        }
+    }
+
+    fun decrypt(stored: String): String {
+        if (stored.isEmpty()) return ""
+        if (!stored.startsWith(PREFIX)) return stored
+        return try {
+            val combined = Base64.decode(stored.removePrefix(PREFIX), Base64.NO_WRAP)
+            val iv = combined.copyOfRange(0, IV_LEN)
+            val cipherText = combined.copyOfRange(IV_LEN, combined.size)
+            val cipher = Cipher.getInstance(TRANSFORM)
+            cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(TAG_BITS, iv))
+            String(cipher.doFinal(cipherText), Charsets.UTF_8)
+        } catch (e: Exception) {
+            ""
+        }
+    }
+}
+
 class ProxyRepository(private val dao: ProxyDao) {
-    val profiles: Flow<List<ProxyProfile>> = dao.getAll()
-    suspend fun add(p: ProxyProfile) { dao.insert(p) }
-    suspend fun update(p: ProxyProfile) { dao.update(p) }
+    val profiles: Flow<List<ProxyProfile>> =
+        dao.getAll().map { list -> list.map { it.copy(password = Crypto.decrypt(it.password)) } }
+
+    suspend fun add(p: ProxyProfile) { dao.insert(p.copy(password = Crypto.encrypt(p.password))) }
+    suspend fun update(p: ProxyProfile) { dao.update(p.copy(password = Crypto.encrypt(p.password))) }
     suspend fun delete(p: ProxyProfile) { dao.delete(p) }
+
+    // One-time: encrypt any passwords still stored as plain text (from before encryption existed).
+    suspend fun migratePasswords() {
+        dao.getAllOnce()
+            .filter { it.password.isNotEmpty() && !Crypto.isEncrypted(it.password) }
+            .forEach { dao.update(it.copy(password = Crypto.encrypt(it.password))) }
+    }
 }
 
 // DataStore for preferences (theme, etc.)
@@ -137,6 +215,10 @@ data class LogEntry(
 class ProxyViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = ProxyRepository(AppDatabase.getInstance(app).proxyDao())
     private val settingsRepo = SettingsRepository(app)
+
+    init {
+        viewModelScope.launch { repo.migratePasswords() }
+    }
 
     val profiles: StateFlow<List<ProxyProfile>> =
         repo.profiles.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
