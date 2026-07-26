@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.net.VpnService
 import android.os.Build
+import android.widget.Toast
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -223,10 +224,14 @@ fun ProxyXApp() {
         val snackbarHostState = remember { SnackbarHostState() }
         val context = LocalContext.current
         val vpnRunning by VpnState.running.collectAsState()
+        var pendingStart by remember { mutableStateOf<ProxyProfile?>(null) }
         val vpnConsentLauncher = rememberLauncherForActivityResult(
             ActivityResultContracts.StartActivityForResult()
         ) { result ->
-            if (result.resultCode == Activity.RESULT_OK) ProxyVpnService.start(context)
+            if (result.resultCode == Activity.RESULT_OK) {
+                pendingStart?.let { ProxyVpnService.start(context, it) }
+            }
+            pendingStart = null
         }
         val notifPermissionLauncher = rememberLauncherForActivityResult(
             ActivityResultContracts.RequestPermission()
@@ -240,9 +245,22 @@ fun ProxyXApp() {
             if (vpnRunning) {
                 ProxyVpnService.stop(context)
             } else {
-                val prepare = VpnService.prepare(context)
-                if (prepare != null) vpnConsentLauncher.launch(prepare)
-                else ProxyVpnService.start(context)
+                val sel = profiles.firstOrNull { it.id == selectedId } ?: profiles.firstOrNull()
+                when {
+                    sel == null ->
+                        Toast.makeText(context, "Add and select a proxy first", Toast.LENGTH_SHORT).show()
+                    sel.type != ProxyType.SOCKS5 ->
+                        Toast.makeText(context, "Routing currently supports SOCKS5 proxies. For HTTP proxies, use Test connection.", Toast.LENGTH_LONG).show()
+                    else -> {
+                        val prepare = VpnService.prepare(context)
+                        if (prepare != null) {
+                            pendingStart = sel
+                            vpnConsentLauncher.launch(prepare)
+                        } else {
+                            ProxyVpnService.start(context, sel)
+                        }
+                    }
+                }
             }
         }
         LaunchedEffect(testResult) {
@@ -522,9 +540,9 @@ fun HomeScreen(
             Spacer(Modifier.height(6.dp))
             Text(
                 if (vpnRunning)
-                    "VPN tunnel is ON. Proxy routing isn't wired in yet \u2014 that's the next step."
+                    "Routing all your traffic through the proxy."
                 else
-                    "Full device-wide routing is coming soon.",
+                    "Turn on to route all device traffic through the selected proxy (SOCKS5).",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
