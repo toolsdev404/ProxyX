@@ -39,10 +39,13 @@ import kotlinx.coroutines.withContext
 import okhttp3.Credentials
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.IOException
 import java.io.OutputStream
 import java.net.ConnectException
+import java.net.Inet4Address
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.Socket
@@ -61,7 +64,7 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-enum class ProxyType { SOCKS5, HTTP, HTTPS }
+enum class ProxyType { SOCKS5, SOCKS4, HTTP, HTTPS }
 
 enum class ThemeMode { System, Light, Dark }
 
@@ -421,6 +424,7 @@ object ProxyTester {
         return try {
             when (profile.type) {
                 ProxyType.SOCKS5 -> testSocks5(profile)
+                ProxyType.SOCKS4 -> testSocks4(profile)
                 ProxyType.HTTP, ProxyType.HTTPS -> testHttp(profile)
             }
         } catch (e: SocketTimeoutException) {
@@ -593,5 +597,59 @@ object ProxyTester {
         0x07 -> "Command not supported by proxy"
         0x08 -> "Address type not supported by proxy"
         else -> "Proxy connection failed (code $rep)"
+    }
+
+    // ---------- SOCKS4 / SOCKS4a proxy (hand-rolled handshake) ----------
+    // SOCKS4 has no password auth; the optional USERID is sent as-is. It addresses the
+    // destination by raw IPv4, so we resolve the neutral test host to an IPv4 first.
+    private fun testSocks4(profile: ProxyProfile): ProxyTestResult {
+        val start = System.currentTimeMillis()
+        val socket = Socket()
+        try {
+            socket.connect(InetSocketAddress(profile.host, profile.port), TIMEOUT_MS)
+            socket.soTimeout = TIMEOUT_MS
+            val out = socket.getOutputStream()
+            val input = DataInputStream(socket.getInputStream())
+
+            val ipv4 = InetAddress.getAllByName(TEST_HOST).firstOrNull { it is Inet4Address }
+                ?: return ProxyTestResult.Failure("Couldn't resolve a test address for SOCKS4")
+
+            val req = ByteArrayOutputStream()
+            req.write(0x04)                        // SOCKS version 4
+            req.write(0x01)                        // command: CONNECT
+            req.write((TEST_PORT shr 8) and 0xFF)  // dest port (high byte)
+            req.write(TEST_PORT and 0xFF)          // dest port (low byte)
+            req.write(ipv4.address)                // dest IPv4 (4 bytes)
+            if (profile.username.isNotEmpty()) {   // optional USERID
+                req.write(profile.username.toByteArray(Charsets.US_ASCII))
+            }
+            req.write(0x00)                        // USERID null terminator
+            out.write(req.toByteArray())
+            out.flush()
+
+            // Reply is 8 bytes: a null byte, a status code, 2-byte port, 4-byte IP.
+            input.readUnsignedByte()               // first byte (should be 0x00)
+            val status = input.readUnsignedByte()
+            skipFully(input, 6)                    // drain the bound port + IP
+
+            val latency = System.currentTimeMillis() - start
+            return if (status == 0x5A) {
+                ProxyTestResult.Success(latency)
+            } else {
+                ProxyTestResult.Failure(socks4Error(status))
+            }
+        } finally {
+            try {
+                socket.close()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun socks4Error(status: Int): String = when (status) {
+        0x5B -> "Request rejected or failed"
+        0x5C -> "Proxy couldn't reach your identd service"
+        0x5D -> "Identd authentication failed"
+        else -> "SOCKS4 connection failed (code $status)"
     }
 }

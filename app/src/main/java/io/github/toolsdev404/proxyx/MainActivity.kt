@@ -37,6 +37,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -147,6 +148,7 @@ private data class ParsedProxy(
 /** Maps a pasted URL scheme (socks5://, http://, https://) to a ProxyType, or null if unknown. */
 private fun schemeToType(scheme: String): ProxyType? = when (scheme.lowercase()) {
     "socks5", "socks5h", "socks" -> ProxyType.SOCKS5
+    "socks4", "socks4a" -> ProxyType.SOCKS4
     "https" -> ProxyType.HTTPS
     "http" -> ProxyType.HTTP
     else -> null
@@ -281,7 +283,7 @@ fun ProxyXApp() {
                     sel == null ->
                         Toast.makeText(context, "Add and select a proxy first", Toast.LENGTH_SHORT).show()
                     sel.type != ProxyType.SOCKS5 ->
-                        Toast.makeText(context, "Routing currently supports SOCKS5 proxies. For HTTP proxies, use Test connection.", Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, "Routing currently supports SOCKS5 only. ${sel.type} proxies can be tested but not routed yet.", Toast.LENGTH_LONG).show()
                     else -> {
                         val prepare = VpnService.prepare(context)
                         if (prepare != null) {
@@ -1263,7 +1265,10 @@ fun ProfileFormScreen(
 
             Text("Type", style = MaterialTheme.typography.labelLarge)
             Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.horizontalScroll(rememberScrollState())
+            ) {
                 ProxyType.entries.forEach { t ->
                     FilterChip(
                         selected = type == t,
@@ -1293,8 +1298,9 @@ fun ProfileFormScreen(
                     Spacer(Modifier.height(8.dp))
                     if (preview != null) {
                         val credPart = if (preview.username.isNotEmpty()) "  |  user ${preview.username}" else ""
+                        val typePart = preview.scheme?.let { schemeToType(it) }?.let { "${it.name}  |  " } ?: ""
                         Text(
-                            "Detected  ->  host ${preview.host}  |  port ${if (preview.port.isEmpty()) "?" else preview.port}$credPart",
+                            "Detected  ->  ${typePart}host ${preview.host}  |  port ${if (preview.port.isEmpty()) "?" else preview.port}$credPart",
                             color = MaterialTheme.colorScheme.primary,
                             style = MaterialTheme.typography.bodySmall
                         )
@@ -1305,6 +1311,16 @@ fun ProfileFormScreen(
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
+                }
+                val pastedType = preview?.scheme?.let { schemeToType(it) }
+                if (pastedType != null && pastedType != type) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "You pasted a ${pastedType.name} proxy but the Type is set to ${type.name}. " +
+                            "It will be saved and tested as ${type.name}.",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
                 Spacer(Modifier.height(12.dp))
                 Card(
