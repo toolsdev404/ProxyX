@@ -317,7 +317,12 @@ class ProxyVpnService : VpnService() {
                     postProxyOfflineAlert()
                 } else {
                     val dnsName = strictPrivateDnsName()
-                    if (dnsName != null) postDnsAlert(dnsName) else postProxyStuckAlert()
+                    if (dnsName != null) {
+                        postDnsAlert(dnsName)
+                        stopVpn()
+                    } else {
+                        postProxyStuckAlert()
+                    }
                 }
             }
         }.start()

@@ -29,6 +29,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Credentials
@@ -266,6 +268,13 @@ class ProxyViewModel(app: Application) : AndroidViewModel(app) {
     private val _logs = MutableStateFlow<List<LogEntry>>(emptyList())
     val logs: StateFlow<List<LogEntry>> = _logs.asStateFlow()
 
+    private val _scanning = MutableStateFlow(false)
+    val scanning: StateFlow<Boolean> = _scanning.asStateFlow()
+
+    // profileId -> reachable? Present only for profiles tested in the current scan.
+    private val _scanResults = MutableStateFlow<Map<Int, Boolean>>(emptyMap())
+    val scanResults: StateFlow<Map<Int, Boolean>> = _scanResults.asStateFlow()
+
     fun setThemeMode(mode: ThemeMode) = viewModelScope.launch { settingsRepo.setThemeMode(mode) }
     fun select(id: Int) = viewModelScope.launch { settingsRepo.setSelectedId(id) }
     fun setAutoConnect(v: Boolean) = viewModelScope.launch { settingsRepo.setAutoConnect(v) }
@@ -308,6 +317,39 @@ class ProxyViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+
+    /** Tests every saved proxy in parallel and records which are reachable (badges + cleanup). */
+    fun scanAll() {
+        if (_scanning.value) return
+        val list = profiles.value
+        if (list.isEmpty()) return
+        _scanning.value = true
+        _scanResults.value = emptyMap()
+        viewModelScope.launch {
+            list.map { p ->
+                async {
+                    val r = ProxyTester.test(p)
+                    _scanResults.value = _scanResults.value + (p.id to (r is ProxyTestResult.Success))
+                }
+            }.awaitAll()
+            _scanning.value = false
+        }
+    }
+
+    /** Deletes every proxy the last scan marked unreachable. */
+    fun deleteDead() {
+        val deadIds = _scanResults.value.filterValues { !it }.keys
+        if (deadIds.isEmpty()) return
+        viewModelScope.launch {
+            val dead = profiles.value.filter { it.id in deadIds }
+            dead.forEach { repo.delete(it) }
+            if (selectedId.value in deadIds) settingsRepo.setSelectedId(null)
+            _scanResults.value = _scanResults.value.filterKeys { it !in deadIds }
+        }
+    }
+
+    /** Clears the current scan badges. */
+    fun clearScan() { _scanResults.value = emptyMap() }
 
     fun clearTestResult() { _testResult.value = null }
 

@@ -223,6 +223,8 @@ fun ProxyXApp() {
         val testingId by vm.testingId.collectAsState()
         val testResult by vm.testResult.collectAsState()
         val logs by vm.logs.collectAsState()
+        val scanResults by vm.scanResults.collectAsState()
+        val scanning by vm.scanning.collectAsState()
         val snackbarHostState = remember { SnackbarHostState() }
         val context = LocalContext.current
         val vpnRunning by VpnState.running.collectAsState()
@@ -382,7 +384,12 @@ fun ProxyXApp() {
                             onDuplicate = { formMode = FormMode.Duplicate(it) },
                             onDelete = { p -> vm.deleteProfile(p) },
                             onTest = { vm.testProxy(it) },
-                            testingId = testingId
+                            testingId = testingId,
+                            scanResults = scanResults,
+                            scanning = scanning,
+                            onScan = { vm.scanAll() },
+                            onDeleteDead = { vm.deleteDead() },
+                            onClearScan = { vm.clearScan() }
                         )
                         Tab.Logs -> LogsScreen(logs = logs, onClear = { vm.clearLogs() })
                         Tab.Settings -> SettingsScreen(
@@ -633,12 +640,19 @@ fun ProfilesScreen(
     onDuplicate: (ProxyProfile) -> Unit,
     onDelete: (ProxyProfile) -> Unit,
     onTest: (ProxyProfile) -> Unit,
-    testingId: Int?
+    testingId: Int?,
+    scanResults: Map<Int, Boolean>,
+    scanning: Boolean,
+    onScan: () -> Unit,
+    onDeleteDead: () -> Unit,
+    onClearScan: () -> Unit
 ) {
     var query by remember { mutableStateOf("") }
     var sort by remember { mutableStateOf(SortOrder.Name) }
     var sortMenuOpen by remember { mutableStateOf(false) }
     var profileToDelete by remember { mutableStateOf<ProxyProfile?>(null) }
+    var confirmDeleteDead by remember { mutableStateOf(false) }
+    var showDeadOnly by remember { mutableStateOf(false) }
 
     val visible = profiles
         .filter {
@@ -648,6 +662,7 @@ fun ProfilesScreen(
                     it.type.name.contains(query, true) ||
                     it.port.toString().contains(query)
         }
+        .filter { !showDeadOnly || scanResults[it.id] == false }
         .let { list ->
             when (sort) {
                 SortOrder.Name -> list.sortedBy { it.name.lowercase() }
@@ -699,6 +714,88 @@ fun ProfilesScreen(
 
             Spacer(Modifier.height(12.dp))
 
+            if (profiles.isNotEmpty()) {
+                val deadCount = scanResults.count { !it.value }
+                OutlinedButton(
+                    onClick = { showDeadOnly = false; onScan() },
+                    enabled = !scanning,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (scanning) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("Scanning… ${scanResults.size}/${profiles.size}")
+                    } else {
+                        Text("Scan for dead proxies")
+                    }
+                }
+                if (!scanning && scanResults.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    if (deadCount > 0) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 8.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        "$deadCount unreachable",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    IconButton(onClick = { showDeadOnly = false; onClearScan() }) {
+                                        Icon(
+                                            Icons.Filled.Clear,
+                                            contentDescription = "Dismiss",
+                                            tint = MaterialTheme.colorScheme.onErrorContainer
+                                        )
+                                    }
+                                }
+                                Text(
+                                    "Delete them all at once, or show only these and remove them one by one (⋮ → Delete).",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    FilterChip(
+                                        selected = showDeadOnly,
+                                        onClick = { showDeadOnly = !showDeadOnly },
+                                        label = { Text(if (showDeadOnly) "Showing unreachable" else "Show only unreachable") }
+                                    )
+                                    Spacer(Modifier.weight(1f))
+                                    TextButton(onClick = { confirmDeleteDead = true }) {
+                                        Text(
+                                            "Delete all",
+                                            color = MaterialTheme.colorScheme.error,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        Text(
+                            "All proxies reachable ✓",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+
             when {
                 profiles.isEmpty() -> Text(
                     "No proxies yet. Tap the + button to add one.",
@@ -722,7 +819,9 @@ fun ProfilesScreen(
                             onDuplicate = { onDuplicate(profile) },
                             onDelete = { profileToDelete = profile },
                             onTest = { onTest(profile) },
-                            isTesting = testingId == profile.id
+                            isTesting = testingId == profile.id,
+                            reachable = scanResults[profile.id],
+                            scanning = scanning
                         )
                     }
                 }
@@ -758,6 +857,23 @@ fun ProfilesScreen(
             }
         )
     }
+
+    if (confirmDeleteDead) {
+        val n = scanResults.count { !it.value }
+        AlertDialog(
+            onDismissRequest = { confirmDeleteDead = false },
+            title = { Text("Delete unreachable proxies?") },
+            text = { Text("$n unreachable ${if (n == 1) "proxy" else "proxies"} will be removed. This can't be undone.") },
+            confirmButton = {
+                TextButton(onClick = { onDeleteDead(); confirmDeleteDead = false }) {
+                    Text("Delete all", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDeleteDead = false }) { Text("Cancel") }
+            }
+        )
+    }
 }
 
 @Composable
@@ -770,7 +886,9 @@ fun ProfileCard(
     onDuplicate: () -> Unit,
     onDelete: () -> Unit,
     onTest: () -> Unit,
-    isTesting: Boolean
+    isTesting: Boolean,
+    reachable: Boolean?,
+    scanning: Boolean
 ) {
     var menuOpen by remember { mutableStateOf(false) }
 
@@ -797,6 +915,16 @@ fun ProfileCard(
                     if (isActive) {
                         Spacer(Modifier.width(8.dp))
                         Text("Active", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                    }
+                    val health: Pair<String, Color>? = when {
+                        reachable == true -> "Reachable" to MaterialTheme.colorScheme.primary
+                        reachable == false -> "Dead" to MaterialTheme.colorScheme.error
+                        scanning -> "Testing…" to MaterialTheme.colorScheme.onSurfaceVariant
+                        else -> null
+                    }
+                    if (health != null) {
+                        Spacer(Modifier.width(8.dp))
+                        Text(health.first, color = health.second, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
                     }
                 }
                 Spacer(Modifier.height(6.dp))
@@ -1128,7 +1256,7 @@ fun ProfileFormScreen(
                                                 } else {
                                                     skipTest = true
                                                     error =
-                                                        "Couldn't reach this proxy — $msg. Fix it, or tap Save anyway."
+                                                        "Couldn't reach this proxy — $msg. Check the host, port, and Type (SOCKS5 / HTTP / HTTPS), or tap Save anyway."
                                                 }
                                             }
                                         }
