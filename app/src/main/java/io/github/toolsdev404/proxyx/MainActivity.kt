@@ -321,7 +321,8 @@ fun ProxyXApp() {
                     if (editProfile != null) vm.updateProfile(saved) else vm.addProfile(saved)
                     formMode = null
                     selectedTab = Tab.Profiles
-                }
+                },
+                verify = { p, cb -> vm.verifyProxy(p, cb) }
             )
         } else {
             Scaffold(
@@ -880,7 +881,8 @@ fun ProfileFormScreen(
     existing: List<ProxyProfile>,
     excludeId: Int?,
     onCancel: () -> Unit,
-    onSave: (ProxyProfile) -> Unit
+    onSave: (ProxyProfile) -> Unit,
+    verify: (ProxyProfile, (Boolean, String) -> Unit) -> Unit
 ) {
     var name by remember { mutableStateOf(initial?.name ?: "") }
     var type by remember { mutableStateOf(initial?.type ?: ProxyType.SOCKS5) }
@@ -893,6 +895,8 @@ fun ProfileFormScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var pasteText by remember { mutableStateOf("") }
     var mode by remember { mutableStateOf(if (initial != null) EntryMode.Manual else EntryMode.Quick) }
+    var verifying by remember { mutableStateOf(false) }
+    var skipTest by remember { mutableStateOf(false) }
 
     Scaffold { innerPadding ->
         Column(
@@ -945,7 +949,7 @@ fun ProfileFormScreen(
             if (mode == EntryMode.Quick) {
                 OutlinedTextField(
                     value = pasteText,
-                    onValueChange = { pasteText = it; error = null },
+                    onValueChange = { pasteText = it; error = null; skipTest = false },
                     label = { Text("Paste proxy") },
                     placeholder = { Text("host:port:user:pass") },
                     minLines = 3,
@@ -997,7 +1001,7 @@ fun ProfileFormScreen(
             } else {
                 OutlinedTextField(
                     value = host,
-                    onValueChange = { value -> host = value.filter { c -> c.code in 33..126 } },
+                    onValueChange = { value -> host = value.filter { c -> c.code in 33..126 }; skipTest = false },
                     label = { Text("Host - IP or domain") },
                     supportingText = { Text("e.g. 203.0.113.5 or proxy.example.com") },
                     singleLine = true,
@@ -1006,7 +1010,7 @@ fun ProfileFormScreen(
                 Spacer(Modifier.height(16.dp))
                 OutlinedTextField(
                     value = port,
-                    onValueChange = { new -> port = new.filter { it.isDigit() }.take(5) },
+                    onValueChange = { new -> port = new.filter { it.isDigit() }.take(5); skipTest = false },
                     label = { Text("Port") },
                     supportingText = { Text("Numbers only, 1-65535") },
                     singleLine = true,
@@ -1100,8 +1104,8 @@ fun ProfileFormScreen(
                                     isDuplicate -> error = "This proxy is already saved (same type, host, port, and username)"
                                     auth && u.isBlank() -> error = "Username is required for authentication"
                                     auth && pw.isBlank() -> error = "Password is required for authentication"
-                                    else -> onSave(
-                                        ProxyProfile(
+                                    else -> {
+                                        val profile = ProxyProfile(
                                             id = assignId,
                                             name = cleanName,
                                             type = type,
@@ -1112,18 +1116,45 @@ fun ProfileFormScreen(
                                             password = pw,
                                             isFavorite = initial?.isFavorite ?: false
                                         )
-                                    )
+                                        if (skipTest) {
+                                            onSave(profile)
+                                        } else {
+                                            error = null
+                                            verifying = true
+                                            verify(profile) { ok, msg ->
+                                                verifying = false
+                                                if (ok) {
+                                                    onSave(profile)
+                                                } else {
+                                                    skipTest = true
+                                                    error =
+                                                        "Couldn't reach this proxy — $msg. Fix it, or tap Save anyway."
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
                     },
+                    enabled = !verifying,
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.primary,
                         contentColor = MaterialTheme.colorScheme.onPrimary
                     )
                 ) {
-                    Text("Save", fontWeight = FontWeight.Bold)
+                    if (verifying) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("Testing…", fontWeight = FontWeight.Bold)
+                    } else {
+                        Text(if (skipTest) "Save anyway" else "Save", fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }

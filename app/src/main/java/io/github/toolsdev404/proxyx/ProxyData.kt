@@ -298,6 +298,17 @@ class ProxyViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Verifies a proxy is reachable before saving. Reports (reachable, message) back to the UI. */
+    fun verifyProxy(p: ProxyProfile, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            val result = ProxyTester.test(p)
+            when (result) {
+                is ProxyTestResult.Success -> onResult(true, "Reachable in ${result.latencyMs} ms")
+                is ProxyTestResult.Failure -> onResult(false, result.reason)
+            }
+        }
+    }
+
     fun clearTestResult() { _testResult.value = null }
 
     fun clearLogs() { _logs.value = emptyList() }
