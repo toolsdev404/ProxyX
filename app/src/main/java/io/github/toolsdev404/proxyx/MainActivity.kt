@@ -1067,7 +1067,7 @@ fun ProfileFormScreen(
                 ProxyType.entries.forEach { t ->
                     FilterChip(
                         selected = type == t,
-                        onClick = { type = t },
+                        onClick = { type = t; skipTest = false },
                         label = { Text(t.name) }
                     )
                 }
@@ -1152,13 +1152,13 @@ fun ProfileFormScreen(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text("Requires authentication", style = MaterialTheme.typography.bodyLarge)
-                    Switch(checked = requiresAuth, onCheckedChange = { requiresAuth = it })
+                    Switch(checked = requiresAuth, onCheckedChange = { requiresAuth = it; skipTest = false })
                 }
                 if (requiresAuth) {
                     Spacer(Modifier.height(16.dp))
                     OutlinedTextField(
                         value = username,
-                        onValueChange = { username = it },
+                        onValueChange = { username = it; skipTest = false },
                         label = { Text("Username") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
@@ -1166,7 +1166,7 @@ fun ProfileFormScreen(
                     Spacer(Modifier.height(16.dp))
                     OutlinedTextField(
                         value = password,
-                        onValueChange = { password = it },
+                        onValueChange = { password = it; skipTest = false },
                         label = { Text("Password") },
                         singleLine = true,
                         visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
