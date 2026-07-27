@@ -1212,7 +1212,7 @@ fun ProfileFormScreen(
     excludeId: Int?,
     onCancel: () -> Unit,
     onSave: (ProxyProfile) -> Unit,
-    verify: (ProxyProfile, (Boolean, String) -> Unit) -> Unit
+    verify: (ProxyProfile, (Boolean, String, ProxyType?) -> Unit) -> Unit
 ) {
     var name by remember { mutableStateOf(initial?.name ?: "") }
     var type by remember { mutableStateOf(initial?.type ?: ProxyType.SOCKS5) }
@@ -1227,6 +1227,7 @@ fun ProfileFormScreen(
     var mode by remember { mutableStateOf(if (initial != null) EntryMode.Manual else EntryMode.Quick) }
     var verifying by remember { mutableStateOf(false) }
     var skipTest by remember { mutableStateOf(false) }
+    var suggestedType by remember { mutableStateOf<ProxyType?>(null) }
 
     Scaffold { innerPadding ->
         Column(
@@ -1408,6 +1409,18 @@ fun ProfileFormScreen(
                 Spacer(Modifier.height(12.dp))
                 Text(msg, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
             }
+            val suggestion = suggestedType
+            if (skipTest && suggestion != null) {
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = {
+                    type = suggestion
+                    suggestedType = null
+                    skipTest = false
+                    error = null
+                }) {
+                    Text("Switch Type to ${suggestion.name}")
+                }
+            }
 
             Spacer(Modifier.height(24.dp))
 
@@ -1470,14 +1483,18 @@ fun ProfileFormScreen(
                                         } else {
                                             error = null
                                             verifying = true
-                                            verify(profile) { ok, msg ->
+                                            suggestedType = null
+                                            verify(profile) { ok, msg, suggested ->
                                                 verifying = false
                                                 if (ok) {
                                                     onSave(profile)
                                                 } else {
                                                     skipTest = true
-                                                    error =
-                                                        "Couldn't reach this proxy — $msg. Check the host, port, and Type (SOCKS5 / HTTP / HTTPS), or tap Save anyway."
+                                                    suggestedType = suggested
+                                                    error = if (suggested != null)
+                                                        "Couldn't reach it as ${profile.type.name}, but it responds as a ${suggested.name} proxy. Switch the Type below, or tap Save anyway."
+                                                    else
+                                                        "Couldn't reach this proxy — $msg. Check the host, port, and Type, or tap Save anyway."
                                                 }
                                             }
                                         }

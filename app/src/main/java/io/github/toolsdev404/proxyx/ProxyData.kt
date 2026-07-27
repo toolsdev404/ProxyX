@@ -330,13 +330,15 @@ class ProxyViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Verifies a proxy is reachable before saving. Reports (reachable, message) back to the UI. */
-    fun verifyProxy(p: ProxyProfile, onResult: (Boolean, String) -> Unit) {
+    /**
+     * Verifies a proxy before saving. On failure, probes the other protocols and passes back
+     * a suggested type (or null) so the UI can offer to switch when the chosen type is wrong.
+     */
+    fun verifyProxy(p: ProxyProfile, onResult: (Boolean, String, ProxyType?) -> Unit) {
         viewModelScope.launch {
-            val result = ProxyTester.test(p)
-            when (result) {
-                is ProxyTestResult.Success -> onResult(true, "Reachable in ${result.latencyMs} ms")
-                is ProxyTestResult.Failure -> onResult(false, result.reason)
+            when (val result = ProxyTester.test(p)) {
+                is ProxyTestResult.Success -> onResult(true, "Reachable in ${result.latencyMs} ms", null)
+                is ProxyTestResult.Failure -> onResult(false, result.reason, ProxyTester.detectType(p))
             }
         }
     }
@@ -437,6 +439,32 @@ object ProxyTester {
             ProxyTestResult.Failure(e.message ?: "Network error")
         } catch (e: Exception) {
             ProxyTestResult.Failure(e.message ?: "Unexpected error")
+        }
+    }
+
+    /**
+     * Probes the proxy across protocols and returns the first that works other than the
+     * profile's current type, or null. Lets the app suggest the right Type when the chosen
+     * one fails (users often paste just host:port). A quick TCP check first keeps a dead
+     * proxy fast. HTTPS is omitted (indistinguishable from HTTP by our test).
+     */
+    suspend fun detectType(profile: ProxyProfile): ProxyType? = withContext(Dispatchers.IO) {
+        if (!isReachableTcp(profile.host, profile.port, 4000)) return@withContext null
+        for (candidate in listOf(ProxyType.SOCKS5, ProxyType.HTTP, ProxyType.SOCKS4)) {
+            if (candidate == profile.type) continue
+            if (attemptOnce(profile.copy(type = candidate)) is ProxyTestResult.Success) {
+                return@withContext candidate
+            }
+        }
+        null
+    }
+
+    private fun isReachableTcp(host: String, port: Int, timeoutMs: Int): Boolean {
+        if (host.isEmpty() || port <= 0) return false
+        return try {
+            Socket().use { it.connect(InetSocketAddress(host, port), timeoutMs); true }
+        } catch (_: Throwable) {
+            false
         }
     }
 
