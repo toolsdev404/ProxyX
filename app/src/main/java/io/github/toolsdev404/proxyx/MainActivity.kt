@@ -2,7 +2,9 @@ package io.github.toolsdev404.proxyx
 
 import android.Manifest
 import android.app.Activity
+import android.content.Intent
 import android.net.VpnService
+import android.provider.Settings
 import android.os.Build
 import android.widget.Toast
 import android.os.Bundle
@@ -229,6 +231,7 @@ fun ProxyXApp() {
         val snackbarHostState = remember { SnackbarHostState() }
         val context = LocalContext.current
         val vpnRunning by VpnState.running.collectAsState()
+        val connectivity by VpnState.connectivity.collectAsState()
         var pendingStart by remember { mutableStateOf<ProxyProfile?>(null) }
         val vpnConsentLauncher = rememberLauncherForActivityResult(
             ActivityResultContracts.StartActivityForResult()
@@ -298,6 +301,7 @@ fun ProxyXApp() {
         val background by vm.background.collectAsState()
         var selectedTab by remember { mutableStateOf(Tab.Home) }
         var formMode by remember { mutableStateOf<FormMode?>(null) }
+        var showDnsHelp by remember { mutableStateOf(false) }
 
         val navColors = NavigationBarItemDefaults.colors(
             selectedIconColor = MaterialTheme.colorScheme.onPrimary,
@@ -308,6 +312,7 @@ fun ProxyXApp() {
         )
 
         BackHandler(enabled = formMode != null) { formMode = null }
+        BackHandler(enabled = showDnsHelp) { showDnsHelp = false }
 
         val mode = formMode
         if (mode != null) {
@@ -333,6 +338,8 @@ fun ProxyXApp() {
                 },
                 verify = { p, cb -> vm.verifyProxy(p, cb) }
             )
+        } else if (showDnsHelp) {
+            DnsHelpScreen(onBack = { showDnsHelp = false })
         } else {
             Scaffold(
                 snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -379,7 +386,9 @@ fun ProxyXApp() {
                             testResult = testResult,
                             onTest = { vm.testProxy(it) },
                             onRoute = onToggleVpn,
-                            vpnRunning = vpnRunning
+                            vpnRunning = vpnRunning,
+                            connectivity = connectivity,
+                            onOpenDnsHelp = { showDnsHelp = true }
                         )
                         Tab.Profiles -> ProfilesScreen(
                             profiles = profiles,
@@ -427,7 +436,9 @@ fun HomeScreen(
     testResult: TestOutcome?,
     onTest: (ProxyProfile) -> Unit,
     onRoute: () -> Unit,
-    vpnRunning: Boolean
+    vpnRunning: Boolean,
+    connectivity: Connectivity,
+    onOpenDnsHelp: () -> Unit
 ) {
     val selected = profiles.firstOrNull { it.id == selectedId } ?: profiles.firstOrNull()
     val favorites = profiles.filter { it.isFavorite }
@@ -451,6 +462,11 @@ fun HomeScreen(
         }
 
         Spacer(Modifier.height(28.dp))
+
+        if (connectivity != Connectivity.IDLE) {
+            ConnectionStatusBanner(connectivity = connectivity, onOpenDnsHelp = onOpenDnsHelp)
+            Spacer(Modifier.height(20.dp))
+        }
 
         if (selected == null) {
             Card(
@@ -633,6 +649,170 @@ fun FavoriteRow(profile: ProxyProfile, isActive: Boolean, onClick: () -> Unit) {
                 Text("Active", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
             }
         }
+    }
+}
+
+@Composable
+fun ConnectionStatusBanner(connectivity: Connectivity, onOpenDnsHelp: () -> Unit) {
+    val color = when (connectivity) {
+        Connectivity.ONLINE -> MaterialTheme.colorScheme.primary
+        Connectivity.NO_INTERNET -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val title = when (connectivity) {
+        Connectivity.CHECKING -> "Connecting…"
+        Connectivity.ONLINE -> "Connected"
+        Connectivity.NO_INTERNET -> "No internet through the proxy"
+        else -> ""
+    }
+    val subtitle = when (connectivity) {
+        Connectivity.CHECKING -> "Setting up the tunnel and checking the proxy…"
+        Connectivity.ONLINE -> "All device traffic is routing through your proxy."
+        Connectivity.NO_INTERNET ->
+            "The proxy may be offline or unreachable, the username/password may be wrong, " +
+                "or your phone's Private DNS may be blocking it."
+        else -> ""
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, color)
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (connectivity == Connectivity.CHECKING) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 2.dp,
+                        color = color
+                    )
+                } else {
+                    Box(Modifier.size(12.dp).clip(CircleShape).background(color))
+                }
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    title,
+                    color = color,
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (connectivity == Connectivity.NO_INTERNET) {
+                Spacer(Modifier.height(4.dp))
+                TextButton(onClick = onOpenDnsHelp) {
+                    Text("How to turn off Private DNS", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun DnsHelpScreen(onBack: () -> Unit) {
+    val context = LocalContext.current
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp)
+    ) {
+        Spacer(Modifier.height(16.dp))
+        TextButton(onClick = onBack) { Text("Back") }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Turn off Private DNS",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(Modifier.height(16.dp))
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+                Text(
+                    "If your phone's Private DNS is set to a specific hostname (strict mode), " +
+                        "it uses a secure DNS port (853) that many proxies block — so websites " +
+                        "won't load while ProxyX is routing.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(16.dp))
+                Text("Steps", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+                DnsHelpStep("1", "Open your phone's Settings.")
+                DnsHelpStep("2", "Search for \"Private DNS\" (usually under Network & internet).")
+                DnsHelpStep("3", "Set it to Off or Automatic.")
+                DnsHelpStep("4", "Come back to ProxyX and tap Route all traffic again.")
+            }
+        }
+
+        Spacer(Modifier.height(20.dp))
+        Button(
+            onClick = {
+                try {
+                    context.startActivity(
+                        Intent(Settings.ACTION_WIRELESS_SETTINGS)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                } catch (_: Throwable) {
+                    try {
+                        context.startActivity(
+                            Intent(Settings.ACTION_SETTINGS)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    } catch (_: Throwable) {
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary
+            )
+        ) {
+            Text("Open network settings", fontWeight = FontWeight.Bold)
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "ProxyX keeps your DNS private through the proxy anyway, so you don't need " +
+                "Private DNS on while routing.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Spacer(Modifier.height(20.dp))
+        OutlinedButton(
+            onClick = onBack,
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Text("Done")
+        }
+    }
+}
+
+@Composable
+private fun DnsHelpStep(number: String, text: String) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Text(
+            "$number.",
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.width(22.dp)
+        )
+        Text(text, style = MaterialTheme.typography.bodyMedium)
     }
 }
 
