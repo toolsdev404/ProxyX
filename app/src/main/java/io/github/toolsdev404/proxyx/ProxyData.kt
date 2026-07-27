@@ -2,6 +2,8 @@ package io.github.toolsdev404.proxyx
 
 import android.app.Application
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -234,6 +236,15 @@ data class LogEntry(
     val message: String
 )
 
+/** True if the DEVICE has a validated internet connection right now (independent of our VPN). */
+fun deviceHasInternet(context: Context): Boolean {
+    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return true
+    val network = cm.activeNetwork ?: return false
+    val caps = cm.getNetworkCapabilities(network) ?: return false
+    return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+}
+
 class ProxyViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = ProxyRepository(AppDatabase.getInstance(app).proxyDao())
     private val settingsRepo = SettingsRepository(app)
@@ -266,6 +277,10 @@ class ProxyViewModel(app: Application) : AndroidViewModel(app) {
     private val _testResult = MutableStateFlow<TestOutcome?>(null)
     val testResult: StateFlow<TestOutcome?> = _testResult.asStateFlow()
 
+    // One-off user-facing notices (e.g. device offline), surfaced as a snackbar.
+    private val _notice = MutableStateFlow<String?>(null)
+    val notice: StateFlow<String?> = _notice.asStateFlow()
+
     private val _logs = MutableStateFlow<List<LogEntry>>(emptyList())
     val logs: StateFlow<List<LogEntry>> = _logs.asStateFlow()
 
@@ -292,6 +307,10 @@ class ProxyViewModel(app: Application) : AndroidViewModel(app) {
 
     fun testProxy(p: ProxyProfile) {
         if (_testingId.value != null) return
+        if (!deviceHasInternet(getApplication<Application>())) {
+            _notice.value = "No internet on this device. Connect to Wi-Fi or mobile data, then try again."
+            return
+        }
         _testingId.value = p.id
         viewModelScope.launch {
             val result = ProxyTester.test(p)
@@ -324,6 +343,10 @@ class ProxyViewModel(app: Application) : AndroidViewModel(app) {
         if (_scanning.value) return
         val list = profiles.value
         if (list.isEmpty()) return
+        if (!deviceHasInternet(getApplication<Application>())) {
+            _notice.value = "You're offline. Connect to Wi-Fi or mobile data to check your proxies."
+            return
+        }
         _scanning.value = true
         _scanResults.value = emptyMap()
         viewModelScope.launch {
@@ -353,6 +376,8 @@ class ProxyViewModel(app: Application) : AndroidViewModel(app) {
     fun clearScan() { _scanResults.value = emptyMap() }
 
     fun clearTestResult() { _testResult.value = null }
+
+    fun clearNotice() { _notice.value = null }
 
     fun clearLogs() { _logs.value = emptyList() }
 }

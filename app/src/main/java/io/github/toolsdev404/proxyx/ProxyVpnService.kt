@@ -163,6 +163,16 @@ class ProxyVpnService : VpnService() {
         startForegroundCompat()
         VpnState.connectivity.value = Connectivity.CHECKING
 
+        // If the DEVICE itself has no internet (airplane mode / Wi-Fi off / no data),
+        // don't blame the proxy - say so and stop, instead of a misleading "proxy offline".
+        if (!deviceHasInternet(this)) {
+            postDeviceOfflineAlert()
+            VpnState.connectivity.value = Connectivity.IDLE
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return
+        }
+
         // Pre-connect gate: actually complete a SOCKS5 handshake + authentication and a
         // test CONNECT through the proxy before routing anything. This is the SAME check
         // as "Test connection", so a proxy with a wrong username/password (or one that
@@ -371,6 +381,12 @@ class ProxyVpnService : VpnService() {
         } catch (_: Throwable) {
             null
         }
+    }
+
+    private fun postDeviceOfflineAlert() {
+        val text = "Your device has no internet connection. Connect to Wi-Fi or mobile data, " +
+                "then tap Route all traffic again."
+        postAlert(text, Intent(this, MainActivity::class.java))
     }
 
     private fun postConnectFailedAlert(reason: String) {

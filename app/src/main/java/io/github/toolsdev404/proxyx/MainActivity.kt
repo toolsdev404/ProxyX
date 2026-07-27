@@ -225,6 +225,7 @@ fun ProxyXApp() {
         val logs by vm.logs.collectAsState()
         val scanResults by vm.scanResults.collectAsState()
         val scanning by vm.scanning.collectAsState()
+        val notice by vm.notice.collectAsState()
         val snackbarHostState = remember { SnackbarHostState() }
         val context = LocalContext.current
         val vpnRunning by VpnState.running.collectAsState()
@@ -282,6 +283,12 @@ fun ProxyXApp() {
                 snackbarHostState.showSnackbar(
                     (if (it.success) "\u2705 " else "\u274C ") + it.profileName + ": " + it.message
                 )
+            }
+        }
+        LaunchedEffect(notice) {
+            notice?.let {
+                snackbarHostState.showSnackbar(it)
+                vm.clearNotice()
             }
         }
 
