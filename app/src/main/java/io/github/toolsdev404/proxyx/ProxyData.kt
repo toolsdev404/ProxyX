@@ -32,6 +32,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.Credentials
 import okhttp3.OkHttpClient
@@ -366,15 +367,33 @@ object ProxyTester {
 
     private const val TIMEOUT_MS = 8000
 
+    // A cold proxy's first attempt can be slow (its first CONNECT, or its first DNS
+    // resolution of the target), slow enough to time out and wrongly mark a valid proxy
+    // as unreachable. Retrying once removes almost all of those false negatives.
+    private const val MAX_ATTEMPTS = 2
+    private const val RETRY_DELAY_MS = 400L
+
     // Neutral connectivity endpoint. Returns HTTP 204 with an empty body.
     // We never send proxy details or personal data anywhere — only this check.
     private const val TEST_HOST = "www.gstatic.com"
     private const val TEST_PORT = 443
     private const val TEST_URL = "https://www.gstatic.com/generate_204"
 
-    /** Runs the correct handshake for the profile's type on a background thread. */
+    /** Runs the correct handshake for the profile's type, retrying once on failure. */
     suspend fun test(profile: ProxyProfile): ProxyTestResult = withContext(Dispatchers.IO) {
-        try {
+        var last: ProxyTestResult = ProxyTestResult.Failure("The proxy didn't respond")
+        for (attempt in 0 until MAX_ATTEMPTS) {
+            val result = attemptOnce(profile)
+            if (result is ProxyTestResult.Success) return@withContext result
+            last = result
+            if (attempt < MAX_ATTEMPTS - 1) delay(RETRY_DELAY_MS)
+        }
+        last
+    }
+
+    /** A single test attempt; runs the correct handshake for the profile's type. */
+    private fun attemptOnce(profile: ProxyProfile): ProxyTestResult {
+        return try {
             when (profile.type) {
                 ProxyType.SOCKS5 -> testSocks5(profile)
                 ProxyType.HTTP, ProxyType.HTTPS -> testHttp(profile)
