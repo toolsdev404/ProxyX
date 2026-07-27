@@ -140,8 +140,17 @@ private data class ParsedProxy(
     val host: String,
     val port: String,
     val username: String,
-    val password: String
+    val password: String,
+    val scheme: String? = null
 )
+
+/** Maps a pasted URL scheme (socks5://, http://, https://) to a ProxyType, or null if unknown. */
+private fun schemeToType(scheme: String): ProxyType? = when (scheme.lowercase()) {
+    "socks5", "socks5h", "socks" -> ProxyType.SOCKS5
+    "https" -> ProxyType.HTTPS
+    "http" -> ProxyType.HTTP
+    else -> null
+}
 
 // Best-effort parser for pasted proxy strings. Handles:
 //   host:port:user:pass  |  host:port  |  user:pass@host:port  |  one value per line
@@ -149,6 +158,7 @@ private data class ParsedProxy(
 private fun parseProxyString(raw: String): ParsedProxy? {
     var text = raw.trim()
     if (text.isEmpty()) return null
+    val scheme = Regex("^([A-Za-z][A-Za-z0-9+.\\-]*)://").find(text)?.groupValues?.get(1)
     text = text.replaceFirst(Regex("^[A-Za-z][A-Za-z0-9+.\\-]*://"), "")
 
     // user:pass@host:port  (only when the part after '@' is a valid host)
@@ -162,7 +172,8 @@ private fun parseProxyString(raw: String): ParsedProxy? {
                 host = host,
                 port = server.getOrNull(1) ?: "",
                 username = creds.getOrNull(0)?.trim() ?: "",
-                password = creds.getOrNull(1)?.trim() ?: ""
+                password = creds.getOrNull(1)?.trim() ?: "",
+                scheme = scheme
             )
         }
         // otherwise the '@' belongs to a password -> fall through
@@ -179,7 +190,8 @@ private fun parseProxyString(raw: String): ParsedProxy? {
                 host = parts[0].trim(),
                 port = parts[1].trim(),
                 username = parts.getOrNull(2)?.trim() ?: "",
-                password = if (parts.size > 3) parts.drop(3).joinToString(":") else ""
+                password = if (parts.size > 3) parts.drop(3).joinToString(":") else "",
+                scheme = scheme
             )
         }
     }
@@ -200,7 +212,8 @@ private fun parseProxyString(raw: String): ParsedProxy? {
         host = host,
         port = port,
         username = rest.getOrNull(0) ?: "",
-        password = rest.getOrNull(1) ?: ""
+        password = rest.getOrNull(1) ?: "",
+        scheme = scheme
     )
 }
 
@@ -1264,7 +1277,12 @@ fun ProfileFormScreen(
             if (mode == EntryMode.Quick) {
                 OutlinedTextField(
                     value = pasteText,
-                    onValueChange = { pasteText = it; error = null; skipTest = false },
+                    onValueChange = { value ->
+                        pasteText = value
+                        error = null
+                        skipTest = false
+                        parseProxyString(value)?.scheme?.let { s -> schemeToType(s)?.let { type = it } }
+                    },
                     label = { Text("Paste proxy") },
                     placeholder = { Text("host:port:user:pass") },
                     minLines = 3,
