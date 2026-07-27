@@ -216,9 +216,11 @@ class ProxyVpnService : VpnService() {
             val file = File(filesDir, "hev-socks5-tunnel.yaml")
             file.writeText(buildConfig(host, port, user, pass))
             configFile = file
-            // Step 1 TEST scaffolding — Step 3 replaces these with the user's settings.
-            File(filesDir, "blocklist.txt").writeText("example.com\ndoubleclick.net\n")
-            File(filesDir, "allowlist.txt").writeText("www.example.com\n")
+            // No blocklist yet: write EMPTY lists so nothing is blocked (fail-open),
+            // overwriting any stale files from a previous run. Ad-block Step 3 will
+            // replace these with the user's Settings-driven lists.
+            File(filesDir, "blocklist.txt").writeText("")
+            File(filesDir, "allowlist.txt").writeText("")
             TProxyService.TProxyStartService(file.absolutePath, descriptor.fd)
         } catch (e: Throwable) {
             false
@@ -242,8 +244,9 @@ class ProxyVpnService : VpnService() {
         sb.append("  port: ").append(port).append("\n")
         sb.append("  udp: 'udp'\n")
         if (user.isNotEmpty() && pass.isNotEmpty()) {
-            sb.append("  username: '").append(user).append("'\n")
-            sb.append("  password: '").append(pass).append("'\n")
+            // Escape single quotes for YAML single-quoted scalars ('' means a literal ').
+            sb.append("  username: '").append(user.replace("'", "''")).append("'\n")
+            sb.append("  password: '").append(pass.replace("'", "''")).append("'\n")
         }
         sb.append("mapdns:\n")
         sb.append("  address: ").append(DNS_ADDRESS).append("\n")
