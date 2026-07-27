@@ -21,6 +21,7 @@ import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import hev.htproxy.TProxyService
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -75,10 +76,6 @@ class ProxyVpnService : VpnService() {
         private const val ALERT_CHANNEL_ID = "proxyx_alerts"
         private const val NOTIF_ID = 1001
         private const val ALERT_ID = 1002
-
-        // Pre-connect reachability timeout: how long we wait for the proxy to answer
-        // before declaring it dead and refusing to bring the tunnel up.
-        private const val GATE_TIMEOUT_MS = 5000
 
         // Post-connect: warn only if still no internet after this window.
         private const val HEALTH_GRACE_MS = 8_000L
@@ -166,21 +163,36 @@ class ProxyVpnService : VpnService() {
         startForegroundCompat()
         VpnState.connectivity.value = Connectivity.CHECKING
 
-        // Pre-connect gate: verify the proxy is actually reachable before we route
-        // anything through it. Runs off the main thread; result handled back on main.
+        // Pre-connect gate: actually complete a SOCKS5 handshake + authentication and a
+        // test CONNECT through the proxy before routing anything. This is the SAME check
+        // as "Test connection", so a proxy with a wrong username/password (or one that
+        // cannot route) is rejected here instead of coming up as a dead "connected"
+        // tunnel. Runs pre-tunnel over the normal network, off the main thread; the
+        // result is handled back on main.
         val gen = ++startGen
+        val probe = ProxyProfile(
+            name = "probe",
+            type = ProxyType.SOCKS5,
+            host = host,
+            port = port,
+            requiresAuth = user.isNotEmpty(),
+            username = user,
+            password = pass
+        )
         Thread {
-            val reachable = isReachable(host, port, GATE_TIMEOUT_MS)
+            val result = runBlocking { ProxyTester.test(probe) }
             mainHandler.post {
                 if (gen != startGen) return@post
-                if (reachable) {
-                    bringUpTunnel(host, port, user, pass)
-                } else {
-                    VpnState.connectivity.value = Connectivity.NO_INTERNET
-                    postProxyOfflineAlert()
-                    // Tear down without wiping the alert we just posted.
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelf()
+                when (result) {
+                    is ProxyTestResult.Success -> bringUpTunnel(host, port, user, pass)
+                    is ProxyTestResult.Failure -> {
+                        // Not routing: surface why, then tear down cleanly. We never set
+                        // VpnState.running true, so the UI stays in the "not routing" state.
+                        postConnectFailedAlert(result.reason)
+                        VpnState.connectivity.value = Connectivity.IDLE
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopSelf()
+                    }
                 }
             }
         }.start()
@@ -359,6 +371,12 @@ class ProxyVpnService : VpnService() {
         } catch (_: Throwable) {
             null
         }
+    }
+
+    private fun postConnectFailedAlert(reason: String) {
+        val text = "Couldn't connect through this proxy: $reason. Nothing was routed. " +
+                "Check the proxy's details (including username and password), or pick another one."
+        postAlert(text, Intent(this, MainActivity::class.java))
     }
 
     private fun postProxyOfflineAlert() {
